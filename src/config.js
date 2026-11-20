@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { URL } from 'node:url';
 import { readFile } from 'node:fs/promises';
 
@@ -110,6 +111,28 @@ function providerConfig(value, name) {
   return settings;
 }
 
+function spareTarget(value, scope, provider) {
+  const target = object(value, 'spare host');
+  requireValue(
+    scope.includes('/') && provider === null,
+    'Spare hosts need a repository pool without a cloud provider'
+  );
+  requireValue(isIP(target.ip) === 4, 'A spare host requires its IPv4 address');
+  return {
+    ip: target.ip,
+    user: match(
+      target.user ?? 'root',
+      /^[a-z_][a-z0-9_-]{0,31}$/,
+      'spare host SSH user'
+    ),
+    hostKey: match(
+      target.hostKey,
+      /^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$/,
+      'spare host public SSH key'
+    ),
+  };
+}
+
 function clusterSettings(pool) {
   return {
     cpus: integer(pool.cpus ?? 4, 2, 64, 'Minikube CPUs'),
@@ -120,6 +143,12 @@ function clusterSettings(pool) {
       'ARC chart version'
     ),
   };
+}
+
+function spareSettings(pool, scope, provider) {
+  return pool.spareHost === undefined
+    ? {}
+    : { spareHost: spareTarget(pool.spareHost, scope, provider) };
 }
 
 function poolConfig(value, name, providers) {
@@ -192,6 +221,7 @@ function poolConfig(value, name, providers) {
       'GitHub administration environment variable'
     ),
     ...clusterSettings(pool),
+    ...spareSettings(pool, scope, provider),
     selectedRepositories,
   };
 }
@@ -274,6 +304,19 @@ function validateFleet(pools, providers) {
   );
 }
 
+function validateSpareHosts(pools, paidPools) {
+  const spareHosts = Object.entries(pools).filter(([, pool]) => pool.spareHost);
+  const spareAddresses = spareHosts.map(([, pool]) => pool.spareHost.ip);
+  requireValue(
+    new Set(spareAddresses).size === spareAddresses.length,
+    'Each spare host needs its own machine'
+  );
+  requireValue(
+    spareHosts.every(([name]) => paidPools.includes(name)),
+    'Spare hosts require a paid account'
+  );
+}
+
 export function validateConfig(input) {
   object(input, 'configuration');
   requireValue(input.version === 1, 'Configuration version must be 1');
@@ -285,6 +328,7 @@ export function validateConfig(input) {
     new Set(paidPools).size === paidPools.length,
     'Each paid account needs its own pool'
   );
+  validateSpareHosts(pools, paidPools);
   validateFleet(pools, providers);
   const prefix = match(
     input.prefix ?? 'hive',

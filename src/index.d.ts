@@ -53,6 +53,7 @@ export interface PoolConfig {
   memoryMiB?: number;
   arcVersion?: string;
   selectedRepositories?: string[];
+  spareHost?: { ip: string; user?: string; hostKey: string };
 }
 
 export interface AccountConfig {
@@ -93,7 +94,7 @@ type RunnerMetrics = {
 type ArcHost = (
   pool: Required<PoolConfig>,
   machine: MachineTarget,
-  operation?: 'deploy' | 'inspect' | 'drain'
+  operation?: 'deploy' | 'deploy-drained' | 'inspect' | 'drain' | 'park'
 ) => Promise<RunnerMetrics | null>;
 type Machine = {
   id: string;

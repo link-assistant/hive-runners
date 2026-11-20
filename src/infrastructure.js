@@ -207,17 +207,26 @@ export async function deploy(
     );
   }
   const applyHost = host ?? arcHost({ env, run });
+  const paid = new Set(Object.values(config.accounts).map(({ pool }) => pool));
   const entries = Object.entries(machines);
   requireValue(entries.length > 0, 'Inventory is empty');
   const counts = new Map();
   const targets = entries.map(([machine, metadata]) => {
     match(machine, /^[a-z][a-z0-9-]{0,61}$/, 'machine name');
-    const { pool: name, ip, user } = metadata;
+    const { pool: name, ip, user, knownHosts } = metadata;
     requireValue(
       Object.hasOwn(config.pools, name),
       `Unknown pool for machine ${machine}`
     );
     const pool = config.pools[name];
+    requireValue(
+      !paid.has(name),
+      'Deploy paid pools through the control plane'
+    );
+    requireValue(
+      !knownHosts || typeof knownHosts === 'string',
+      'Invalid SSH known-hosts data'
+    );
     requireValue(
       typeof ip === 'string' &&
         (isIP(ip) || /^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(ip)),
@@ -229,6 +238,7 @@ export async function deploy(
       pool,
       ip,
       user,
+      knownHosts,
       group: pool.scope.includes('/') ? undefined : machine,
     };
   });

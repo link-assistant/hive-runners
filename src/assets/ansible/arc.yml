@@ -178,3 +178,26 @@
           tags: [inspect, drain]
           ansible.builtin.debug:
             msg: 'HIVE_RUNNER_COUNT={{ (hive_runners.stdout | from_json)["items"] | length }};{{ hive_host_usage.stdout }}'
+        - name: Remove the idle ARC runner scale set from a spare host
+          tags: [park]
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/helm
+              - uninstall
+              - hive-pool
+              - --namespace
+              - hive-runners
+              - --ignore-not-found
+              - --wait
+        - name: Remove the idle pool credential secret
+          tags: [park]
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/minikube
+              - kubectl
+              - '--'
+              - delete
+              - secret
+              - hive-arc-auth
+              - --namespace=hive-runners
+              - --ignore-not-found

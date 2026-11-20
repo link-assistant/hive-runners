@@ -85,16 +85,20 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
     );
     match(user, /^[a-z_][a-z0-9_-]{0,31}$/, 'SSH user');
     requireValue(
-      ['deploy', 'drain', 'inspect'].includes(operation),
+      ['deploy', 'deploy-drained', 'drain', 'inspect', 'park'].includes(
+        operation
+      ),
       'Invalid ARC operation'
     );
     requireValue(
       pool.scope.includes('/') || group,
       'Organization deployments require a distinct runner group'
     );
-    const credentials =
-      operation === 'deploy' ? arcCredentials(pool.credentialsEnv, env) : {};
-    if (operation === 'deploy') {
+    const deploying = operation.startsWith('deploy');
+    const credentials = deploying
+      ? arcCredentials(pool.credentialsEnv, env)
+      : {};
+    if (deploying) {
       await prepareGithub(pool, group);
     }
     const inventory = {
@@ -118,7 +122,11 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
         'variables.json',
         JSON.stringify({
           hive_arc_version: pool.arcVersion,
-          hive_arc_values: arcValues(pool, group),
+          hive_arc_values: arcValues(
+            pool,
+            group,
+            operation === 'deploy-drained'
+          ),
           hive_minikube_cpus: pool.cpus,
           hive_minikube_memory: pool.memoryMiB,
         })
@@ -130,7 +138,7 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
           inventoryPath,
           playbook,
           '--tags',
-          operation,
+          deploying ? 'deploy' : operation,
           '--extra-vars',
           `@${variables}`,
         ],

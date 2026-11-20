@@ -2,12 +2,12 @@
 
 ## Choose what to deploy
 
-| Mode                    | Configure                                                                   | Where jobs run                                     |
-| ----------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |
-| Existing private runner | SSH inventory and a private repository or organization pool                 | Your existing machine                              |
-| Private fleet           | One or more private pools, provider credentials and a GitHub webhook        | Terraform and API-managed machines                 |
-| Seller                  | A private pool and bearers for each customer, plus optional Stripe Checkout | A dedicated API-managed machine per customer       |
-| Hub                     | Customer accounts with upstream offers and optional local provider          | A local dedicated machine or the selected supplier |
+| Mode                    | Configure                                                                   | Where jobs run                                              |
+| ----------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Existing private runner | SSH inventory and a private repository or organization pool                 | Your existing machine                                       |
+| Private fleet           | One or more private pools, provider credentials and a GitHub webhook        | Terraform and API-managed machines                          |
+| Seller                  | A private pool and bearers for each customer, plus optional Stripe Checkout | A dedicated API-managed or contributed machine per customer |
+| Hub                     | Customer accounts with upstream offers and optional local provider          | A local dedicated machine or the selected supplier          |
 
 Use an Ubuntu 24.04 or Debian host with Docker-compatible virtualization, IPv4, Python 3 for Ansible, and SSH. For a Contabo VPS 20 profile start with the recommended 6 vCPU, 12 GB memory and 200 GB SSD tier. The example Hetzner CX23 profile has fewer resources and needs the smaller runner sizing. Look up the current plan, image, location, SSH key IDs, recurring cost, IP costs, tax and provisioning terms in the provider account. [Contabo VPS specifications](https://docs.contabo.com/docs/products/cloud-vps/) · [Hetzner pricing changes](https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/)
 
@@ -70,4 +70,4 @@ Create a dedicated repository pool and account for each customer. Start it at ze
 
 Set `HIVE_STRIPE_SECRET_KEY`, `HIVE_STRIPE_WEBHOOK_SECRET` and `HIVE_PUBLIC_ORIGIN` to enable credit purchases. Subscribe Stripe to Checkout completion, asynchronous payment success, charge refunds and dispute creation at `/webhooks/stripe`. Stripe hosts the payment form. Keep the same account identity and SQLite ledger across upgrades. [Stripe Checkout fulfillment](https://docs.stripe.com/checkout/fulfillment) · [Stripe webhooks](https://docs.stripe.com/webhooks)
 
-A seller shares available fleet quota with prepaid accounts while preserving machine and repository isolation. A hub adds upstream HTTPS origins, keys and wholesale rate ceilings to customer accounts. The supplier needs the same repository and runner label, its own account key, prepaid credit and permission to deploy ARC. The hub checks offers from configured peers, selects the cheapest match and holds the selected peer through activation and withdrawal. Upstream capacity requires bilateral configuration. Automatic supplier onboarding, payouts and cross-tenant reuse of running machines are open scope.
+A seller can share available fleet quota or contribute an idle machine to a prepaid pool. To contribute an existing dedicated Ubuntu host, put its IPv4 address, SSH user and verified Ed25519 host public key in the paid repository pool’s `spareHost` object as `ip`, `user`, and `hostKey`. Leave the provider unset. The host starts serving only after paid job demand, then the reconciler drains ARC and removes its runner set and credential secret when the activation ends. Keep a contributed host dedicated to one tenant for its lifetime, or reimage it before assigning it to another tenant. A hub adds upstream HTTPS origins, keys and wholesale rate ceilings to customer accounts. The supplier needs the same repository and runner label, its own account key, prepaid credit and permission to deploy ARC. The hub checks offers from configured peers, selects the cheapest match and holds the selected peer through activation and withdrawal. Upstream capacity requires bilateral configuration. Suppliers settle through prepaid accounts, and operators authorize peers before automatic selection. Concurrent jobs from separate tenants require separate hosts.

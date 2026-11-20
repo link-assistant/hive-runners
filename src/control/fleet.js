@@ -9,6 +9,7 @@ import { machineName } from '../infrastructure.js';
 import { runProcess } from '../process.js';
 import { providerClient } from '../providers.js';
 import { withWorkspace } from '../workspace.js';
+import { spareFleet } from './spare.js';
 
 export function bootstrapKeys(run = runProcess) {
   return withWorkspace(async ({ directory }) => {
@@ -157,7 +158,7 @@ function machineLifecycle(store, config, { now, host, keys }) {
   async function drain(machine, pool, hostTarget, remote, client, time) {
     if (machine.phase === 'booting') {
       // An interrupted bootstrap may have deployed ARC. Never assume the instance is empty.
-      await host(pool, hostTarget);
+      await host(pool, hostTarget, 'deploy-drained');
     }
     const result = await host(
       pool,
@@ -199,17 +200,20 @@ export function fleet(
     keys,
   });
 
+  const spare = spareFleet(store, config, { now, host, report });
+
   function poolMachines(name) {
-    return store
+    const machines = store
       .entries('machine')
       .map(([, machine]) => machine)
       .filter((machine) => machine.pool === name);
+    return [...machines, ...spare.machines(name)];
   }
 
   function hasRoom(name) {
     const pool = config.pools[name];
     if (!pool.provider || pool.terraformMachines >= pool.maxMachines) {
-      return false;
+      return Boolean(pool.spareHost);
     }
     const { reserved, machines } = totals(config, store, pool.provider);
     const leases = store.entries('lease').filter(([id, lease]) => {
@@ -233,6 +237,7 @@ export function fleet(
   }
 
   function validateBindings() {
+    spare.validateBindings();
     for (const [, machine] of store.entries('machine')) {
       const pool = config.pools[machine.pool];
       const cloud = config.providers[machine.provider];
@@ -294,6 +299,7 @@ export function fleet(
     reconciling = true;
     try {
       validateBindings();
+      await spare.reconcile(workloads, paidRouting);
       for (const [id, cloud] of Object.entries(config.providers)) {
         try {
           const client = provider(cloud);

@@ -338,3 +338,53 @@ describe('fleet and federation', () => {
     );
   });
 });
+
+describe('spare machine sales', () => {
+  it('deploys on contributed hardware only for paid demand and parks after drain', async () => {
+    const hostKey = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'A'.repeat(43)}`;
+    const spareHost = { ip: '192.0.2.11', hostKey, user: 'operator' };
+    const reseller = {
+      ...config,
+      providers: {},
+      pools: {
+        jobs: { scope: 'org/repo', capacity: 1, spareHost },
+      },
+    };
+    let time = epoch;
+    const operations = [];
+    await withHttp(
+      reseller,
+      {
+        now: () => time,
+        scaling: {
+          host: async (_pool, target, operation = 'deploy') => {
+            expect(target.knownHosts).toBe(`${spareHost.ip} ${hostKey}\n`);
+            operations.push(operation);
+            return { runners: 0, availableMemoryMiB: 5120, load1: 0.1 };
+          },
+        },
+      },
+      async (plane, request) => {
+        await request('/webhooks/github', githubRequest(event('queued')));
+        await plane.reconcile();
+        expect(operations).toEqual([]);
+        const lease = await request('/v1/activation', {
+          method: 'PUT',
+          headers: auth,
+          body: '{"minutes":15}',
+        });
+        expect(lease.status).toBe(200);
+        await plane.reconcile();
+        expect(operations).toEqual(['deploy', 'inspect']);
+        await request('/v1/activation', { method: 'DELETE', headers: auth });
+        await plane.reconcile();
+        time += 61000;
+        await plane.reconcile();
+        expect(operations).toEqual(['deploy', 'inspect', 'drain', 'inspect']);
+        await plane.reconcile();
+        expect(operations.at(-1)).toBe('park');
+        expect(plane.scale.poolMachines('jobs')).toEqual([]);
+      }
+    );
+  });
+});
