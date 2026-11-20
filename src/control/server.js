@@ -122,7 +122,10 @@ function authenticatedRoutes({ accountFor, commerce, payments, now }) {
     const id = accountFor(request.headers.authorization);
     const method = request.method;
     if (path === '/v1/offer' && method === 'GET') {
-      return json(response, commerce.offer(id));
+      return json(response, {
+        ...commerce.offer(id),
+        checkoutEnabled: !!payments,
+      });
     }
     if (path === '/v1/activation' || path === '/v1/wholesale') {
       const wholesale = path === '/v1/wholesale';

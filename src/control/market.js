@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { integer, requireValue, secret } from '../config.js';
 import { HttpError, httpClient } from '../http.js';
 
@@ -187,17 +188,19 @@ export function market(
     const route = old?.route ?? (local ? 'local' : 'upstream');
     const lease = {
       expires: Math.max(old?.expires ?? 0, expires),
+      starts: old?.starts ?? Math.floor(now() / 1000) * 1000,
+      window: old?.window ?? randomUUID(),
       route,
       wholesale,
       ...(old?.peer ? { peer: old.peer } : {}),
     };
-    return store.put('lease', id, lease);
+    return ledger.saveLease(id, lease);
   }
 
   function withdraw(id, wholesale = false) {
     const old = store.get('lease', id);
-    if (old?.wholesale === wholesale) {
-      store.put('lease', id, { ...old, expires: now() });
+    if (old?.wholesale === wholesale && old.expires > now()) {
+      ledger.saveLease(id, { ...old, expires: now() });
     }
     return { active: false, draining: offer(id).draining };
   }
@@ -215,8 +218,10 @@ export function market(
           }
         } else {
           const previous = store.get('lease', id);
+          if (lease) {
+            withdraw(id, lease.wholesale);
+          }
           if (previous?.peer) {
-            withdraw(id);
             await upstream.releaseUpstream(id, previous);
           }
         }

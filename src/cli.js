@@ -1,6 +1,7 @@
 import { URL } from 'node:url';
 import { readFile, writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
+import { runnerAccount } from './account.js';
 import {
   githubScope,
   loadConfig,
@@ -41,6 +42,19 @@ const commands = {
   'provider-list': [
     '--name PROVIDER [--config FILE]',
     'List compute instances through the configured provider API.',
+  ],
+  'account-offer': [
+    '--origin HTTPS_URL',
+    'Show the runner pool and its credit.',
+  ],
+  'account-activate': [
+    '--origin HTTPS_URL --minutes MINUTES',
+    'Activate the runner pool for up to one hour.',
+  ],
+  'account-stop': ['--origin HTTPS_URL', 'End the runner pool activation.'],
+  'account-checkout': [
+    '--origin HTTPS_URL --cents CENTS --request-id UUID',
+    'Start a Stripe Checkout session to add runner credit.',
   ],
   serve: [
     '[--config FILE]',
@@ -130,6 +144,26 @@ function githubCommand(command, options, env, fetcher) {
   );
 }
 
+function accountCommand(command, options, { env, fetcher }) {
+  const account = runnerAccount(
+    options.origin,
+    secret('HIVE_ACCOUNT_KEY', env),
+    {
+      fetcher,
+    }
+  );
+  if (command === 'account-offer') {
+    return account.offer();
+  }
+  if (command === 'account-activate') {
+    return account.activate(Number(options.minutes));
+  }
+  if (command === 'account-stop') {
+    return account.stop();
+  }
+  return account.checkout(Number(options.cents), options['request-id']);
+}
+
 async function runConfigured(command, options, input, { env, fetcher, run }) {
   if (command === 'render') {
     return renderInfrastructure(input, options.directory ?? '.');
@@ -181,6 +215,9 @@ async function dispatch(command, options, dependencies) {
       dependencies.env,
       dependencies.fetcher
     );
+  }
+  if (command.startsWith('account-')) {
+    return accountCommand(command, options, dependencies);
   }
   return runConfigured(
     command,

@@ -55,7 +55,41 @@ function acceptUpdate(previous, stage, minutes) {
   );
 }
 
+function usageWindows(store, now) {
+  const scope = (id) => `activation:${id}`;
+  return {
+    saveLease(id, lease) {
+      return store.transaction(() => {
+        const history = scope(id);
+        if (lease.window && !store.get(history, lease.window)) {
+          const retention = now() - 14 * day;
+          for (const [key, { expires }] of store.entries(history)) {
+            if (expires < retention) {
+              store.delete(history, key);
+            }
+          }
+        }
+        if (lease.window) {
+          store.put(history, lease.window, {
+            starts: lease.starts,
+            expires: lease.expires,
+          });
+        }
+        return store.put('lease', id, lease);
+      });
+    },
+    contains(id, started) {
+      return store
+        .entries(scope(id))
+        .some(
+          ([, { starts, expires }]) => starts <= started && started < expires
+        );
+    },
+  };
+}
+
 export function ledger(store, config, now = Date.now) {
+  const windows = usageWindows(store, now);
   const accounts = new Map(
     Object.entries(config.accounts).map(([id, account]) => [account.pool, id])
   );
@@ -105,6 +139,7 @@ export function ledger(store, config, now = Date.now) {
         stage === 2 &&
         account &&
         minutes &&
+        windows.contains(account, started) &&
         typeof job.runner_name === 'string' &&
         job.runner_name.startsWith(`${label}-`);
       const charge = metered ? minutes * rate : 0;
@@ -165,5 +200,5 @@ export function ledger(store, config, now = Date.now) {
     return status;
   }
 
-  return { credit, adjust, ingest, workloads };
+  return { credit, adjust, ingest, workloads, saveLease: windows.saveLease };
 }

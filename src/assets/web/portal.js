@@ -30,6 +30,7 @@ async function refresh() {
   element('activation').textContent = offer.activation
     ? `Activation ends at ${new Date(offer.activation.expires).toLocaleTimeString()}. Submit your GitHub workflow to use the pool.`
     : 'No runner activation is currently scheduled.';
+  element('payment').hidden = !offer.checkoutEnabled;
   element('account').hidden = false;
 }
 

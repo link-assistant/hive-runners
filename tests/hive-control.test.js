@@ -1,6 +1,7 @@
 import { URLSearchParams } from 'node:url';
 import { describe, it, expect } from 'test-anywhere';
 import { once } from 'node:events';
+import { runHiveCli, runnerAccount } from '@link-assistant/hive-runners';
 import { controlPlane } from '../src/control/server.js';
 import { openStore } from '../src/control/store.js';
 import { digest } from '../src/control/usage.js';
@@ -94,7 +95,10 @@ const auth = { authorization: `Bearer ${key}` };
 
 describe('control plane and usage', () => {
   it('serves the landing page and rejects missing keys or forged usage', async () => {
-    await withHttp(config, {}, async (plane, request) => {
+    let time = epoch - 120000;
+    await withHttp(config, { now: () => time }, async (plane, request) => {
+      plane.commerce.activate('customer', epoch + 900000);
+      time = epoch;
       expect((await request('/')).status).toBe(200);
       expect((await request('/guide.html')).status).toBe(200);
       expect(await (await request('/docs/generated-cli.md')).text()).toContain(
@@ -122,6 +126,7 @@ describe('control plane and usage', () => {
         await request('/v1/offer', { headers: auth })
       ).json();
       expect(offer.credit).toBe(80);
+      expect(offer.checkoutEnabled).toBe(false);
       expect(plane.usage.workloads().jobs).toEqual({ queued: 0, running: 0 });
       expect((await request('/metrics')).status).toBe(401);
       expect(
@@ -160,7 +165,11 @@ describe('control plane and usage', () => {
       OTHER_KEY: 'y'.repeat(48),
       OTHER_WEBHOOK_SECRET: otherSecret,
     };
-    await withHttp(inputs, { env }, async (plane, request) => {
+    let time = epoch - 120000;
+    await withHttp(inputs, { env, now: () => time }, async (plane, request) => {
+      plane.commerce.activate('customer', epoch + 900000);
+      plane.commerce.activate('other', epoch + 900000);
+      time = epoch;
       const forged = signedEvent(event('completed'), otherSecret);
       expect((await request('/webhooks/github', forged)).status).toBe(202);
       expect(plane.usage.credit('customer')).toBe(100);
@@ -217,6 +226,13 @@ describe('Stripe payments', () => {
           body: JSON.stringify({ amount: 500 }),
         });
         expect(checkout.status).toBe(201);
+        const account = runnerAccount('https://example.com', key, {
+          fetcher: (url, args) => request(url.pathname, args),
+        });
+        expect((await account.offer()).checkoutEnabled).toBe(true);
+        expect(await account.checkout(500, id)).toEqual({
+          url: 'https://checkout.stripe.com/c/pay/fixture',
+        });
         expect(plane.usage.credit('customer')).toBe(100);
         async function post(type, object, timestamp = epoch / 1000) {
           const body = JSON.stringify({ type, data: { object } });
@@ -254,6 +270,30 @@ describe('Stripe payments', () => {
         expect(plane.usage.credit('customer')).toBe(100);
       }
     );
+  });
+});
+
+it('supports customer operations through the CLI and library', async () => {
+  await withHttp(config, {}, async (_plane, request) => {
+    const origin = 'https://retail.example.com';
+    const fetcher = (url, args) => request(url.pathname, args);
+    const account = runnerAccount(origin, key, { fetcher });
+    expect((await account.offer()).credit).toBe(100);
+    const output = [];
+    expect(
+      await runHiveCli(
+        ['account-activate', '--origin', origin, '--minutes', '15'],
+        {
+          env: { HIVE_ACCOUNT_KEY: key },
+          fetcher,
+          stdout: (value) => output.push(JSON.parse(value)),
+        }
+      )
+    ).toBe(0);
+    expect(output[0].expires).toBe(epoch + 900000);
+    expect((await account.offer()).activation.route).toBe('local');
+    expect(await account.stop()).toEqual({ active: false, draining: false });
+    expect((await account.offer()).activation).toBe(null);
   });
 });
 
@@ -498,9 +538,11 @@ it('connects two control planes and meters the same job at retail and wholesale 
     },
   };
   const operations = [];
+  let time = epoch - 120000;
   await withHttp(
     supplier,
     {
+      now: () => time,
       env: {
         ...options.env,
         CUSTOMER_KEY: supplierKey,
@@ -514,9 +556,15 @@ it('connects two control planes and meters the same job at retail and wholesale 
       },
     },
     async (reseller, supplierRequest) => {
+      await supplierRequest(
+        '/webhooks/github',
+        signedEvent(event('completed', 99), supplierSecret)
+      );
+      expect(reseller.usage.credit('customer')).toBe(100);
       await withHttp(
         hub,
         {
+          now: () => time,
           env: { ...options.env, SUPPLIER_KEY: supplierKey },
           fetcher: (url, args) => supplierRequest(url.pathname, args),
         },
@@ -528,8 +576,7 @@ it('connects two control planes and meters the same job at retail and wholesale 
           });
           expect((await activation.json()).route).toBe('upstream');
           await retail.reconcile();
-          for (const action of ['queued', 'completed', 'completed']) {
-            const job = event(action);
+          async function deliver(job) {
             expect(
               (await hubRequest('/webhooks/github', githubRequest(job))).status
             ).toBe(202);
@@ -541,12 +588,12 @@ it('connects two control planes and meters the same job at retail and wholesale 
                 )
               ).status
             ).toBe(202);
-            await reseller.reconcile();
           }
+          await deliver(event('queued'));
+          await reseller.reconcile();
           expect(operations).toContain('deploy');
           expect(retail.scale.poolMachines('jobs')).toEqual([]);
-          expect(retail.usage.credit('customer')).toBe(80);
-          expect(reseller.usage.credit('customer')).toBe(92);
+          time = epoch - 20000;
           await hubRequest('/v1/activation', {
             method: 'DELETE',
             headers: auth,
@@ -554,6 +601,16 @@ it('connects two control planes and meters the same job at retail and wholesale 
           await retail.reconcile();
           await reseller.reconcile();
           expect(operations).toContain('drain');
+          time = epoch;
+          await deliver(event('completed'));
+          await deliver(event('completed'));
+          const laterJob = event('completed', 100);
+          laterJob.workflow_job.started_at = new Date(
+            epoch - 10000
+          ).toISOString();
+          await deliver(laterJob);
+          expect(retail.usage.credit('customer')).toBe(80);
+          expect(reseller.usage.credit('customer')).toBe(92);
         }
       );
     }

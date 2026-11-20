@@ -1,4 +1,5 @@
 export * from './index.js';
+export { runnerAccount } from './account.js';
 export { validateConfig, loadConfig } from './config.js';
 export { githubClient } from './github.js';
 export { providerClient } from './providers.js';

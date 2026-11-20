@@ -56,22 +56,24 @@
             End activation
           </button>
         </p>
-        <h2>Add execution credit</h2>
-        <form id="checkout">
-          <label
-            >Top-up (USD)
-            <input
-              id="amount"
-              type="number"
-              min="5"
-              max="1000"
-              step="0.01"
-              value="10"
-              required /></label
-          ><button class="button outline" type="submit">
-            Continue to checkout <span aria-hidden="true">↗</span>
-          </button>
-        </form>
+        <div id="payment" hidden>
+          <h2>Add execution credit</h2>
+          <form id="checkout">
+            <label
+              >Top-up (USD)
+              <input
+                id="amount"
+                type="number"
+                min="5"
+                max="1000"
+                step="0.01"
+                value="10"
+                required /></label
+            ><button class="button outline" type="submit">
+              Continue to checkout <span aria-hidden="true">↗</span>
+            </button>
+          </form>
+        </div>
       </section>
     </main>
   </body>

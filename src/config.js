@@ -6,6 +6,8 @@ export const slug = /^[a-z][a-z0-9-]{0,30}$/;
 export const environmentName = /^[A-Z_][A-Z0-9_]*$/;
 export const repositoryName = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
 export const version = /^v?[0-9]+\.[0-9]+\.[0-9]+$/;
+export const uuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const githubScope =
   /^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\/[A-Za-z0-9][A-Za-z0-9_.-]{0,99})?$/;
 

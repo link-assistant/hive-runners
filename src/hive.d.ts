@@ -154,6 +154,32 @@ export declare function runHiveCli(
   }
 ): Promise<number>;
 export declare function cliReference(): string;
+export interface RunnerActivation {
+  expires: number;
+  route: 'local' | 'upstream';
+  wholesale: boolean;
+}
+export declare function runnerAccount(
+  origin: string,
+  key: string,
+  options?: { fetcher?: typeof fetch }
+): {
+  offer(): Promise<{
+    scope: string;
+    label: string;
+    capacity: number;
+    rate: number;
+    currency: 'usd';
+    available: boolean;
+    activation: RunnerActivation | null;
+    draining: boolean;
+    credit: number;
+    checkoutEnabled: boolean;
+  }>;
+  activate(minutes: number): Promise<RunnerActivation>;
+  stop(): Promise<{ active: false; draining: boolean }>;
+  checkout(amount: number, requestId: string): Promise<{ url: string }>;
+};
 export declare function serve(
   config: HiveConfig,
   options?: { env?: Environment; state?: string; port?: number; host?: string }

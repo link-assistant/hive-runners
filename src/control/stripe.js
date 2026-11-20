@@ -1,5 +1,5 @@
 import { URL, URLSearchParams } from 'node:url';
-import { integer, requireValue } from '../config.js';
+import { integer, match, requireValue, uuid } from '../config.js';
 import { httpClient } from '../http.js';
 import { digest, secureEqual } from './usage.js';
 
@@ -37,10 +37,7 @@ export function stripePayments(store, ledger, { token, origin, fetcher }) {
 
   async function checkout(account, request, amount) {
     integer(amount, 500, 100000, 'top-up cents');
-    requireValue(
-      /^[0-9a-f-]{36}$/.test(request),
-      'Provide a UUID for checkout'
-    );
+    match(request, uuid, 'checkout request ID');
     const order = `${account}:${request}`;
     store.transaction(() => {
       const previous = store.get('order', order);

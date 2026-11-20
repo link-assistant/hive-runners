@@ -74,6 +74,38 @@ List compute instances through the configured provider API.
 hive-runners provider-list --name PROVIDER [--config FILE]
 ```
 
+## account-offer
+
+Show the runner pool and its credit.
+
+```text
+hive-runners account-offer --origin HTTPS_URL
+```
+
+## account-activate
+
+Activate the runner pool for up to one hour.
+
+```text
+hive-runners account-activate --origin HTTPS_URL --minutes MINUTES
+```
+
+## account-stop
+
+End the runner pool activation.
+
+```text
+hive-runners account-stop --origin HTTPS_URL
+```
+
+## account-checkout
+
+Start a Stripe Checkout session to add runner credit.
+
+```text
+hive-runners account-checkout --origin HTTPS_URL --cents CENTS --request-id UUID
+```
+
 ## serve
 
 Start the fleet reconciler, landing page, and optional customer portal.
