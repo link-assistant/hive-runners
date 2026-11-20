@@ -27,6 +27,8 @@ export interface PoolConfig {
   cpus?: number;
   memoryMiB?: number;
   arcVersion?: string;
+  containerMode?: 'process' | 'kubernetes-novolume' | 'dind';
+  runnerImage?: string;
   selectedRepositories?: string[];
   spareHost?: { ip: string; user?: string; hostKey: string };
 }
@@ -36,7 +38,12 @@ export interface AccountConfig {
   keyEnv: string;
   rate: number;
   initialCredit?: number;
-  upstreams?: { origin: string; keyEnv: string; maxRate: number }[];
+  upstreams?: {
+    origin: string;
+    keyEnv: string;
+    maxRate: number;
+    notation?: 'lino' | 'json';
+  }[];
 }
 
 export interface HiveConfig {
@@ -162,7 +169,7 @@ export interface RunnerActivation {
 export declare function runnerAccount(
   origin: string,
   key: string,
-  options?: { fetcher?: typeof fetch }
+  options?: { fetcher?: typeof fetch; notation?: boolean }
 ): {
   offer(): Promise<{
     scope: string;
@@ -184,3 +191,7 @@ export declare function serve(
   config: HiveConfig,
   options?: { env?: Environment; state?: string; port?: number; host?: string }
 ): Promise<import('node:http').Server>;
+export declare function migrateState(
+  source: string,
+  destination: string
+): Promise<string>;

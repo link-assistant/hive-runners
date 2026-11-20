@@ -16,3 +16,8 @@ export async function serve(config, options) {
   const control = await import('./control/server.js');
   return control.serve(config, options);
 }
+
+export async function migrateState(source, destination) {
+  const { migrateState: migrate } = await import('./control/migrate.js');
+  return migrate(source, destination);
+}

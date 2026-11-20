@@ -1,8 +1,8 @@
 import { clearInterval, setInterval } from 'node:timers';
 import { URL } from 'node:url';
-import { mkdir } from 'node:fs/promises';
+import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   httpsOrigin,
@@ -16,7 +16,9 @@ import { market, RequestError } from './market.js';
 import { openStore } from './store.js';
 import { stripePayments, verifyStripe } from './stripe.js';
 import { digest, ledger, secureEqual } from './usage.js';
-import { publicPage } from './web.js';
+import { formatNotation, linoMediaType, parseNotation } from '../notation.js';
+import { parseLinks } from '@link-foundation/ui-core';
+import { publicPages, portalScriptPolicy } from './web.js';
 
 function hash(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -104,6 +106,65 @@ function json(response, data, status = 200) {
     .end(JSON.stringify(data));
 }
 
+const jsonMediaType = 'application/json';
+
+function respond(request, response, data, status) {
+  const accept = request.headers.accept ?? '';
+  const types = new Map(
+    accept.split(',').map((entry) => {
+      const [type, ...parameters] = entry.toLowerCase().split(';');
+      const quality = parameters
+        .map((p) => p.trim())
+        .find((p) => p.startsWith('q='));
+      return [
+        type.trim(),
+        quality === undefined ? 1 : Number(quality.slice(2)),
+      ];
+    })
+  );
+  const linoQuality = types.get(linoMediaType) ?? 0;
+  response.setHeader('vary', 'Accept');
+  if (linoQuality > 0 && linoQuality >= (types.get(jsonMediaType) ?? 0)) {
+    return response
+      .writeHead(status ?? 200, {
+        'content-type': `${linoMediaType}; charset=utf-8`,
+      })
+      .end(formatNotation(data));
+  }
+  return json(response, data, status);
+}
+
+async function inputObject(request) {
+  const type = (request.headers['content-type'] ?? jsonMediaType)
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (
+    type !== linoMediaType &&
+    type !== jsonMediaType &&
+    type !== 'text/plain'
+  ) {
+    throw new RequestError(415, 'Use Links Notation or JSON');
+  }
+  const bytes = await body(request);
+  let input;
+  if (type === linoMediaType) {
+    const source = bytes.toString('utf8');
+    try {
+      parseLinks(source, { maxDepth: 16 });
+      input = parseNotation(source);
+    } catch {
+      throw new RequestError(400, 'Malformed Links Notation');
+    }
+  } else {
+    input = parse(bytes);
+  }
+  if (!input || Object.getPrototypeOf(input) !== Object.prototype) {
+    throw new RequestError(400, 'Expected an object');
+  }
+  return Object.assign(Object.create(null), input);
+}
+
 function wholesaleExpiration(input, offer) {
   if (
     typeof input.scope !== 'string' ||
@@ -122,7 +183,7 @@ function authenticatedRoutes({ accountFor, commerce, payments, now }) {
     const id = accountFor(request.headers.authorization);
     const method = request.method;
     if (path === '/v1/offer' && method === 'GET') {
-      return json(response, {
+      return respond(request, response, {
         ...commerce.offer(id),
         checkoutEnabled: !!payments,
       });
@@ -130,19 +191,24 @@ function authenticatedRoutes({ accountFor, commerce, payments, now }) {
     if (path === '/v1/activation' || path === '/v1/wholesale') {
       const wholesale = path === '/v1/wholesale';
       if (method === 'DELETE') {
-        return json(response, commerce.withdraw(id, wholesale));
+        return respond(request, response, commerce.withdraw(id, wholesale));
       }
       if (method === 'PUT') {
-        const input = parse(await body(request));
+        const input = await inputObject(request);
         const expires = wholesale
           ? wholesaleExpiration(input, commerce.offer(id))
           : now() + integer(input.minutes, 1, 60, 'activation minutes') * 60000;
-        return json(response, commerce.activate(id, expires, wholesale));
+        return respond(
+          request,
+          response,
+          commerce.activate(id, expires, wholesale)
+        );
       }
     }
     if (path === '/v1/checkout' && method === 'POST' && payments) {
-      const input = parse(await body(request));
-      return json(
+      const input = await inputObject(request);
+      return respond(
+        request,
         response,
         {
           url: await payments.checkout(
@@ -204,6 +270,7 @@ export function controlPlane(
   } = {}
 ) {
   const config = validateConfig(input);
+  const publicPage = publicPages(env.HIVE_UI_DIR);
   const accountFor = authorize(config, env);
   const usage = ledger(store, config, now);
   const githubKeys = githubSignatures(config, env);
@@ -293,7 +360,7 @@ export function controlPlane(
       response.setHeader('referrer-policy', 'no-referrer');
       response.setHeader(
         'content-security-policy',
-        "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        `default-src 'self'; script-src 'self' ${portalScriptPolicy}; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`
       );
       route(request, response).catch((error) => {
         const message =
@@ -304,11 +371,12 @@ export function controlPlane(
           logger.error('Hive Runners request failed', error.name);
         }
         if (!response.headersSent && !response.destroyed) {
-          json(
-            response,
-            { error: message },
-            error instanceof RequestError ? error.status : 422
-          );
+          const status = error instanceof RequestError ? error.status : 422;
+          if (request.url.startsWith('/v1/')) {
+            respond(request, response, { error: message }, status);
+          } else {
+            json(response, { error: message }, status);
+          }
         }
       });
     }
@@ -336,30 +404,52 @@ export async function serve(
   config,
   {
     env = process.env,
-    state = env.HIVE_STATE ?? './hive-state/runner.sqlite',
+    state = env.HIVE_STATE ?? './hive-state/ledger',
     port = Number(env.PORT ?? 8080),
     host = env.HOST ?? '127.0.0.1',
   } = {}
 ) {
   integer(port, 1, 65535, 'HTTP port');
-  await mkdir(dirname(state), { mode: 0o700, recursive: true });
-  const store = openStore(state);
+  const oldState = join(dirname(state), 'runner.sqlite');
+  requireValue(
+    (existsSync(state) ? statSync(state).isDirectory() : true) &&
+      (existsSync(join(state, 'runner.links')) || !existsSync(oldState)),
+    'Migrate the existing SQLite ledger with hive-runners migrate-state before starting'
+  );
+  const maxPages = integer(
+    Number(env.HIVE_STATE_MAX_PAGES ?? 32768),
+    1024,
+    65536,
+    'Ledger page limit'
+  );
+  const interval = integer(
+    Number(env.HIVE_RECONCILE_MS ?? 30000),
+    1000,
+    600000,
+    'Reconcile interval in milliseconds'
+  );
+  const store = openStore(state, { maxPages });
   try {
     const plane = controlPlane(config, { env, store });
     await new Promise((ready, fail) => {
       plane.server.once('error', fail);
-      plane.server.listen(port, host, ready);
+      plane.server.listen(port, host, () => {
+        plane.server.removeListener('error', fail);
+        ready();
+      });
     });
-    const timer = setInterval(plane.reconcile, 30000);
+    const timer = setInterval(plane.reconcile, interval);
     void plane.reconcile();
-    async function stop() {
+    function stop() {
+      plane.server.close();
+    }
+    plane.server.once('close', async () => {
       process.removeListener('SIGINT', stop);
       process.removeListener('SIGTERM', stop);
       clearInterval(timer);
-      await new Promise((done) => plane.server.close(done));
       await plane.pending();
       store.close();
-    }
+    });
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
     return plane.server;

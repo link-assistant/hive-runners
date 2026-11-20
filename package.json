@@ -114,5 +114,12 @@
   "overrides": {
     "minimatch@>=7 <11": "^11.0.4",
     "glob@>=9 <=14.0.1": "^14.0.2"
+  },
+  "dependencies": {
+    "@link-foundation/link-cli-client": "0.5.0",
+    "@link-foundation/ui-core": "0.1.0",
+    "@link-foundation/ui-dom": "0.1.0",
+    "links-notation": "0.27.1",
+    "lino-objects-codec": "0.9.5"
   }
 }

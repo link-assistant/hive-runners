@@ -9,6 +9,7 @@ The same control plane can sell prepaid runner minutes, sell spare fleet quota, 
 Use Node.js 24 or newer and clone this repository to try the CLI.
 
 ```bash
+npm ci
 node bin/hive-runners.js init
 node bin/hive-runners.js render
 node bin/hive-runners.js --help
@@ -17,7 +18,7 @@ node bin/hive-runners.js --help
 Replace the example scope with your private repository. To deploy to an existing Ubuntu VPS, supply an inventory and ARC credentials. A larger fleet can use Terraform for baseline machines and the API reconciler for additional capacity.
 
 ```bash
-node bin/hive-runners.js deploy --inventory ./inventory.json
+node bin/hive-runners.js deploy --inventory ./inventory.lino
 ```
 
 ## Configuration
@@ -201,7 +202,7 @@ See [BEST-PRACTICES.md](docs/BEST-PRACTICES.md) for detailed explanations of eac
 
 #### Hosted Runner Capacity
 
-GitHub sometimes cannot hand out a hosted runner, most often macOS arm64. It
+GitHub sometimes cannot hand out a hosted runner. It
 then gives up with "The job was not acquired by Runner of type hosted even
 after multiple attempts", and the job ends cancelled or failed with no runner
 and no steps. No code ran, so the template treats it as infrastructure:
@@ -216,10 +217,8 @@ and no steps. No code ran, so the template treats it as infrastructure:
   branch supersedes. `workflow_run` only fires for this file on the default
   branch.
 
-The macOS legs stay required: a release is only published when every runtime
-on every OS passed. If a fork does not need macOS to release, it can mark the
-leg `continue-on-error`, at the cost of `needs.test.result` reporting success
-when that leg fails.
+The release checks run Node.js, Bun, and Deno on Ubuntu. A release requires all
+three runtime checks to pass.
 
 #### Robust Changeset Handling
 

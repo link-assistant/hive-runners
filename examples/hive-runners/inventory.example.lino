@@ -1,0 +1,7 @@
+(
+  example-runner-1 (
+    pool "private-linux"
+    ip "192.0.2.10"
+    user "root"
+  )
+)

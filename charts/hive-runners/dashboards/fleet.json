@@ -1,0 +1,207 @@
+{
+  "title": "Hive Runners",
+  "uid": "hive-runners",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Job demand",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hive_queued_jobs",
+          "legendFormat": "{{pool}} queued"
+        },
+        {
+          "refId": "B",
+          "expr": "hive_running_jobs",
+          "legendFormat": "{{pool}} running"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Fleet capacity",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hive_managed_machines",
+          "legendFormat": "{{pool}} managed"
+        },
+        {
+          "refId": "B",
+          "expr": "hive_static_machines",
+          "legendFormat": "{{pool}} baseline"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Available host memory",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "mbytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hive_machine_available_memory_mib",
+          "legendFormat": "{{machine}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Host load (1 minute)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hive_machine_load1",
+          "legendFormat": "{{machine}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Runner pods per machine",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hive_machine_runner_pods",
+          "legendFormat": "{{machine}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Control plane health",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(up{job=~\"hive-runners|.*-hive\"})",
+          "legendFormat": "Scrape"
+        },
+        {
+          "refId": "B",
+          "expr": "min(hive_reconciler_healthy)",
+          "legendFormat": "Reconcile"
+        }
+      ]
+    }
+  ]
+}

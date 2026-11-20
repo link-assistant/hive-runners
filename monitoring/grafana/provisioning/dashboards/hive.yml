@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: Hive Runners
+    type: file
+    options:
+      path: /etc/hive-dashboards

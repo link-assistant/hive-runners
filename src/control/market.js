@@ -43,6 +43,7 @@ function suppliers(store, config, { env, fetcher, active, funded }) {
     return httpClient(peer.origin, {
       headers: { authorization: `Bearer ${secret(peer.keyEnv, env)}` },
       fetcher,
+      notation: peer.notation === 'lino',
     });
   }
 

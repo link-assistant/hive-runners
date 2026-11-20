@@ -1,0 +1,26 @@
+(
+  version 1
+  pools (
+    paid-linux (
+      scope "customer-org/customer-private-repo"
+      webhookSecretEnv "CUSTOMER_WEBHOOK_SECRET"
+      capacity 1
+      cpus 2
+      memoryMiB 2560
+    )
+  )
+  accounts (
+    customer (
+      pool "paid-linux"
+      keyEnv "CUSTOMER_ACCOUNT_KEY"
+      rate 8
+      upstreams (
+        (
+          origin "https://supplier.example.com"
+          keyEnv "SUPPLIER_ACCOUNT_KEY"
+          maxRate 5
+        )
+      )
+    )
+  )
+)

@@ -1,11 +1,12 @@
 import { httpsOrigin, integer, match, uuid } from './config.js';
 import { httpClient } from './http.js';
 
-export function runnerAccount(origin, key, { fetcher } = {}) {
+export function runnerAccount(origin, key, { fetcher, notation = true } = {}) {
   match(key, /^[!-~]{32,512}$/, 'runner account key');
   const request = httpClient(httpsOrigin(origin, 'Runner account'), {
     headers: { authorization: `Bearer ${key}` },
     fetcher,
+    notation,
   });
   return {
     offer: () => request('/v1/offer'),

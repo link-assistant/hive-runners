@@ -1,0 +1,22 @@
+(page
+  (title 'Deployment guide · Hive Runners')
+  (header (class 'shell top')
+    (a (class brand) (href /)
+      (span (aria-hidden true) (content H))
+      (copy (content ' Hive Runners')))
+    (nav (aria-label Main) (a (href /portal) (content 'Runner portal'))))
+  (main (class 'shell interior')
+    (h1 (content 'Deploy a fleet'))
+    (p (class lede)
+      (content 'Start with one private repository and an Ubuntu host. Use your runner pool label in the workflow.'))
+    (pre (code (content 'hive-runners init
+hive-runners render
+hive-runners deploy --inventory inventory.lino')))
+    (h2 (content 'Connect GitHub'))
+    (p (content 'Install the GitHub App for the repository or organization. Supply its ARC credentials and a GitHub administration token to the deployment process.'))
+    (h2 (content 'Enable on-demand capacity'))
+    (p (content 'Configure a provider, subscribe to GitHub workflow-job events, and run the control plane to add machines when jobs queue up.'))
+    (p
+      (a (href /docs/hive-runners.md) (content 'Operator guide'))
+      (copy (content ' · '))
+      (a (href /docs/generated-cli.md) (content 'CLI reference')))))

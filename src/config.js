@@ -1,6 +1,6 @@
 import { isIP } from 'node:net';
 import { URL } from 'node:url';
-import { readFile } from 'node:fs/promises';
+import { readData, parseNotation } from './notation.js';
 
 export const slug = /^[a-z][a-z0-9-]{0,30}$/;
 export const environmentName = /^[A-Z_][A-Z0-9_]*$/;
@@ -144,6 +144,16 @@ function clusterSettings(pool) {
       version,
       'ARC chart version'
     ),
+    containerMode: match(
+      pool.containerMode ?? 'process',
+      /^(process|kubernetes-novolume|dind)$/,
+      'ARC container mode'
+    ),
+    runnerImage: match(
+      pool.runnerImage ?? 'ghcr.io/actions/actions-runner:latest',
+      /^[a-z0-9][a-zA-Z0-9./:_@-]{0,254}$/,
+      'ARC runner image'
+    ),
   };
 }
 
@@ -254,6 +264,10 @@ function accountConfig(value, name, pools) {
     'Paid pools must start with zero machines and warm runners'
   );
   requireValue(
+    pools[pool].containerMode !== 'dind',
+    'Paid pools cannot use privileged Docker-in-Docker'
+  );
+  requireValue(
     Array.isArray(account.upstreams ?? []),
     'Account upstreams must be an array'
   );
@@ -279,6 +293,11 @@ function accountConfig(value, name, pools) {
         'upstream key environment variable'
       ),
       maxRate: integer(upstream.maxRate, 1, account.rate, 'upstream rate'),
+      notation: match(
+        upstream.notation ?? 'lino',
+        /^(lino|json)$/,
+        'upstream notation'
+      ),
     })),
   };
 }
@@ -352,11 +371,15 @@ export function validateConfig(input) {
 }
 
 export async function loadConfig(path) {
-  return validateConfig(JSON.parse(await readFile(path, 'utf8')));
+  return validateConfig(await readData(path));
 }
 
 export function arcCredentials(envName, env) {
-  const fields = object(JSON.parse(secret(envName, env)), 'ARC credentials');
+  const text = secret(envName, env);
+  const fields = object(
+    text.trimStart().startsWith('{') ? JSON.parse(text) : parseNotation(text),
+    'ARC credentials'
+  );
   const allowed = Object.hasOwn(fields, 'github_token')
     ? ['github_token']
     : ['github_app_id', 'github_app_installation_id', 'github_app_private_key'];

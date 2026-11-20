@@ -10,12 +10,20 @@ export const playbook = fileURLToPath(
   new URL('./assets/ansible/arc.yml', import.meta.url)
 );
 
+const runnerUser = { runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001 };
+const seccomp = { seccompProfile: { type: 'RuntimeDefault' } };
+
 export function arcValues(pool, group, drained = false) {
+  const kubernetes = pool.containerMode === 'kubernetes-novolume';
+  const docker = pool.containerMode === 'dind';
   return {
     githubConfigUrl: `https://github.com/${pool.scope}`,
     githubConfigSecret: 'hive-arc-auth',
     runnerScaleSetName: pool.label,
     ...(group ? { runnerGroup: group } : {}),
+    ...(kubernetes || docker
+      ? { containerMode: { type: pool.containerMode } }
+      : {}),
     minRunners: drained ? 0 : pool.warmRunners,
     maxRunners: drained ? 0 : pool.capacity,
     controllerServiceAccount: {
@@ -25,28 +33,55 @@ export function arcValues(pool, group, drained = false) {
     template: {
       metadata: { labels: { 'hive-runners.net/workload': 'runner' } },
       spec: {
-        automountServiceAccountToken: false,
-        securityContext: {
-          runAsNonRoot: true,
-          runAsUser: 1001,
-          runAsGroup: 1001,
-          seccompProfile: { type: 'RuntimeDefault' },
-        },
+        automountServiceAccountToken: kubernetes,
+        securityContext: docker
+          ? { fsGroup: 123, supplementalGroups: [123] }
+          : { ...runnerUser, ...seccomp },
+        ...(kubernetes
+          ? {
+              volumes: [
+                {
+                  name: 'hive-job-policy',
+                  configMap: { name: 'hive-job-policy' },
+                },
+              ],
+            }
+          : {}),
         containers: [
           {
             name: 'runner',
-            image: 'ghcr.io/actions/actions-runner:latest',
+            image: pool.runnerImage ?? 'ghcr.io/actions/actions-runner:latest',
             command: ['/home/runner/run.sh'],
             securityContext: {
               allowPrivilegeEscalation: false,
               capabilities: { drop: ['ALL'] },
+              ...(docker ? { ...runnerUser, ...seccomp } : {}),
             },
             resources: {
-              requests: {
-                cpu: `${Math.floor(((pool.cpus - 1) * 1000) / pool.capacity)}m`,
-                memory: `${Math.floor((pool.memoryMiB - 1024) / pool.capacity)}Mi`,
-              },
+              requests: kubernetes
+                ? { cpu: '100m', memory: '128Mi' }
+                : {
+                    cpu: `${Math.floor(((pool.cpus - 1) * 1000) / pool.capacity)}m`,
+                    memory: `${Math.floor((pool.memoryMiB - 1024) / pool.capacity)}Mi`,
+                  },
             },
+            ...(kubernetes
+              ? {
+                  env: [
+                    {
+                      name: 'ACTIONS_RUNNER_CONTAINER_HOOK_TEMPLATE',
+                      value: '/etc/hive-job-policy/pod.yaml',
+                    },
+                  ],
+                  volumeMounts: [
+                    {
+                      name: 'hive-job-policy',
+                      mountPath: '/etc/hive-job-policy',
+                      readOnly: true,
+                    },
+                  ],
+                }
+              : {}),
           },
         ],
       },
@@ -129,6 +164,7 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
           ),
           hive_minikube_cpus: pool.cpus,
           hive_minikube_memory: pool.memoryMiB,
+          hive_container_mode: pool.containerMode ?? 'process',
         })
       );
       const output = await run(

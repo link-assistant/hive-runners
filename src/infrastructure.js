@@ -4,6 +4,7 @@ import { isIP } from 'node:net';
 import { join, resolve } from 'node:path';
 import { arcHost, arcValues, playbook } from './arc.js';
 import { integer, match, requireValue, validateConfig } from './config.js';
+import { formatNotation } from './notation.js';
 import { runProcess } from './process.js';
 
 const credentials = {
@@ -140,11 +141,15 @@ export async function renderInfrastructure(input, directory) {
   );
   const files = {
     'fleet.tf.json': format(terraformPlan(config)),
-    'config.json': format(config),
-    'inventory.example.json': format({ all: { children: hosts } }),
+    'config.lino': formatNotation(config),
+    'inventory.example.lino': formatNotation({ all: { children: hosts } }),
     'arc.yml': await readFile(playbook, 'utf8'),
     'runner-network.yml': await readFile(
       new URL('./assets/ansible/runner-network.yml', import.meta.url),
+      'utf8'
+    ),
+    'kubernetes-jobs.yml': await readFile(
+      new URL('./assets/ansible/kubernetes-jobs.yml', import.meta.url),
       'utf8'
     ),
     'arc-values.json': format(

@@ -1,4 +1,7 @@
+import { decode, encode } from '/lino/index.js';
+
 const element = (id) => globalThis.document.getElementById(id);
+const notation = 'text/vnd.links-notation';
 let key;
 let checkout;
 const dollars = new Intl.NumberFormat('en-US', {
@@ -7,15 +10,18 @@ const dollars = new Intl.NumberFormat('en-US', {
 });
 
 async function api(path, options = {}) {
+  const { body, headers, ...request } = options;
   const response = await fetch(`/v1/${path}`, {
-    ...options,
+    ...request,
     headers: {
-      'content-type': 'application/json',
+      accept: notation,
+      ...(body === undefined ? {} : { 'content-type': notation }),
       authorization: `Bearer ${key}`,
-      ...options.headers,
+      ...headers,
     },
+    body: body === undefined ? undefined : encode({ obj: body }),
   });
-  const result = await response.json();
+  const result = decode({ notation: await response.text() });
   if (!response.ok) {
     throw new Error(result.error);
   }
@@ -61,7 +67,7 @@ action('login', 'submit', async () => {
 action('activate', 'submit', async () => {
   await api('activation', {
     method: 'PUT',
-    body: JSON.stringify({ minutes: element('minutes').valueAsNumber }),
+    body: { minutes: element('minutes').valueAsNumber },
   });
   await refresh();
 });
@@ -76,7 +82,7 @@ action('checkout', 'submit', async () => {
   }
   const { url } = await api('checkout', {
     method: 'POST',
-    body: JSON.stringify({ amount }),
+    body: { amount },
     headers: { 'idempotency-key': checkout.id },
   });
   globalThis.location.assign(url);

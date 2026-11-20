@@ -8,6 +8,7 @@ import {
   cliReference,
   deploy,
   githubClient,
+  loadConfig,
   propose,
   providerClient,
   renderInfrastructure,
@@ -19,9 +20,7 @@ import { withWorkspace } from '../src/workspace.js';
 
 describe('Hive Runners infrastructure', () => {
   it('renders both providers and preserves existing Terraform on reconfiguration', async () => {
-    const original = JSON.parse(
-      await readFile('examples/hive-runners/fleet.json', 'utf8')
-    );
+    const original = await loadConfig('examples/hive-runners/fleet.lino');
     const input = {
       ...original,
       accounts: {},
@@ -128,7 +127,7 @@ describe('Hive Runners infrastructure', () => {
             expect(args.slice(0, 3)).toEqual(['pr', 'create', '--draft']);
             const description = await readFile(args.at(-1), 'utf8');
             expect(description).toContain('org/private-repo');
-            expect(description).toContain('hive-managed/config.json');
+            expect(description).toContain('hive-managed/config.lino');
             return 'https://example.com/pull/1';
           },
         }
@@ -140,6 +139,48 @@ describe('Hive Runners infrastructure', () => {
       ).toContain(`refs/heads/${branch}`);
     });
   });
+});
+
+it('opts into container jobs with mode-specific credentials and rejects privileged paid runners', async () => {
+  const scope = 'org/private-repo';
+  const runnerImage = 'registry.example.com/actions/runner:custom';
+  const provider = {
+    type: 'hetzner',
+    region: 'fsn1',
+    product: 'cx23',
+    image: 'ubuntu-24.04',
+    sshKeys: ['admin'],
+    monthlyCents: 649,
+  };
+  const input = { version: 1, providers: { local: provider } };
+  const isolated = validateConfig({
+    ...input,
+    pools: {
+      jobs: { scope, runnerImage, containerMode: 'kubernetes-novolume' },
+    },
+  });
+  const kube = arcValues(isolated.pools.jobs);
+  expect(kube.containerMode).toEqual({ type: 'kubernetes-novolume' });
+  expect(kube.template.spec.automountServiceAccountToken).toBe(true);
+  expect(kube.template.spec.containers[0].image).toBe(runnerImage);
+  expect(kube.template.spec.containers[0].env[0].value).toBe(
+    '/etc/hive-job-policy/pod.yaml'
+  );
+
+  const privileged = { scope, provider: 'local', containerMode: 'dind' };
+  const trusted = validateConfig({ ...input, pools: { jobs: privileged } });
+  const docker = arcValues(trusted.pools.jobs);
+  expect(docker.containerMode).toEqual({ type: 'dind' });
+  expect(docker.template.spec.automountServiceAccountToken).toBe(false);
+  expect(() =>
+    validateConfig({
+      ...input,
+      pools: { jobs: privileged },
+      accounts: {
+        customer: { pool: 'jobs', keyEnv: 'CUSTOMER_KEY', rate: 1 },
+      },
+    })
+  ).toThrow();
 });
 
 describe('provider and GitHub API contracts', () => {

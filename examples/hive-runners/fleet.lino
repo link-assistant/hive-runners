@@ -1,0 +1,59 @@
+(
+  version 1
+  prefix "example"
+  providers (
+    value (
+      type "contabo"
+      region "EU"
+      product "YOUR-PRODUCT-ID"
+      image "YOUR-UBUNTU-IMAGE-ID"
+      sshKeys (
+        "123456"
+      )
+      maxMachines 5
+      monthlyCents 720
+    )
+    hourly (
+      type "hetzner"
+      region "fsn1"
+      product "cx23"
+      image "ubuntu-24.04"
+      sshKeys (
+        "fleet-admin"
+      )
+      maxMachines 8
+      monthlyCents 649
+    )
+  )
+  pools (
+    private-builds (
+      scope "your-org"
+      selectedRepositories (
+        "private-repo"
+      )
+      provider "value"
+      terraformMachines 1
+      minMachines 0
+      maxMachines 3
+      capacity 2
+    )
+    paid-linux (
+      scope "customer-org/customer-private-repo"
+      credentialsEnv "CUSTOMER_ARC_AUTH"
+      groupTokenEnv "CUSTOMER_GITHUB_TOKEN"
+      webhookSecretEnv "CUSTOMER_WEBHOOK_SECRET"
+      provider "hourly"
+      capacity 1
+      cpus 2
+      memoryMiB 2560
+      idleSeconds 300
+    )
+  )
+  accounts (
+    customer (
+      pool "paid-linux"
+      keyEnv "CUSTOMER_ACCOUNT_KEY"
+      rate 5
+    )
+  )
+)

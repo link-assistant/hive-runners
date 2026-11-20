@@ -1,10 +1,14 @@
 import { URLSearchParams } from 'node:url';
 import { describe, it, expect } from 'test-anywhere';
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runHiveCli, runnerAccount } from '@link-assistant/hive-runners';
 import { controlPlane } from '../src/control/server.js';
 import { openStore } from '../src/control/store.js';
 import { digest } from '../src/control/usage.js';
+import { parseNotation } from '../src/notation.js';
 
 const webhookSecret = 'fixture-webhook';
 const key = 'x'.repeat(48);
@@ -77,7 +81,7 @@ function signedEvent(payload, secret) {
 }
 
 async function withHttp(input, setup, test) {
-  const store = openStore();
+  const store = setup.store ?? openStore();
   const plane = controlPlane(input, { ...options, ...setup, store });
   try {
     plane.server.listen(0, '127.0.0.1');
@@ -86,7 +90,10 @@ async function withHttp(input, setup, test) {
       fetch(`http://127.0.0.1:${plane.server.address().port}${path}`, args)
     );
   } finally {
-    await new Promise((resolve) => plane.server.close(resolve));
+    await new Promise((resolve) => {
+      plane.server.close(resolve);
+      plane.server.closeAllConnections();
+    });
     store.close();
   }
 }
@@ -101,6 +108,8 @@ describe('control plane and usage', () => {
       time = epoch;
       expect((await request('/')).status).toBe(200);
       expect((await request('/guide.html')).status).toBe(200);
+      expect((await request('/lino/index.js')).status).toBe(200);
+      expect((await request('/lino/parser.js')).status).toBe(200);
       expect(await (await request('/docs/generated-cli.md')).text()).toContain(
         'Hive Runners CLI reference'
       );
@@ -137,6 +146,47 @@ describe('control plane and usage', () => {
         ).status
       ).toBe(200);
     });
+  });
+
+  it('does not charge a completed job again after the ledger reopens', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hive-usage-restart-'));
+    try {
+      let time = epoch - 120000;
+      await withHttp(
+        config,
+        { store: openStore(directory), now: () => time },
+        async (plane, request) => {
+          plane.commerce.activate('customer', epoch + 900000);
+          time = epoch;
+          expect(
+            (
+              await request(
+                '/webhooks/github',
+                githubRequest(event('completed'))
+              )
+            ).status
+          ).toBe(202);
+          expect(plane.usage.credit('customer')).toBe(80);
+        }
+      );
+      await withHttp(
+        config,
+        { store: openStore(directory) },
+        async (plane, request) => {
+          expect(
+            (
+              await request(
+                '/webhooks/github',
+                githubRequest(event('completed'))
+              )
+            ).status
+          ).toBe(202);
+          expect(plane.usage.credit('customer')).toBe(80);
+        }
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('limits signed job events to pools with the matching webhook secret', async () => {
@@ -286,7 +336,7 @@ it('supports customer operations through the CLI and library', async () => {
         {
           env: { HIVE_ACCOUNT_KEY: key },
           fetcher,
-          stdout: (value) => output.push(JSON.parse(value)),
+          stdout: (value) => output.push(parseNotation(value)),
         }
       )
     ).toBe(0);
@@ -393,7 +443,7 @@ describe('upstream federation', () => {
           const cheaper = url.hostname === 'lower-price.example.com';
           operations.push([
             `${url.hostname}${url.pathname}`,
-            args.body && JSON.parse(args.body),
+            args.body && parseNotation(args.body),
           ]);
           if (cheaper && args.method === 'PUT') {
             return globalThis.Response.json({}, { status: 409 });

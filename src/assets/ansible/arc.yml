@@ -100,10 +100,36 @@
               ansible.builtin.command:
                 argv: [/usr/local/bin/minikube, kubectl, '--', apply, -f, '-']
                 stdin: '{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"hive-runners"}}'
+            - name: Apply the pod security profile for this runner mode
+              ansible.builtin.command:
+                argv:
+                  - /usr/local/bin/minikube
+                  - kubectl
+                  - '--'
+                  - label
+                  - namespace
+                  - hive-runners
+                  - "pod-security.kubernetes.io/enforce={{ 'privileged' if hive_container_mode == 'dind' else 'baseline' }}"
+                  - --overwrite
             - name: Isolate runner workloads on the network
               ansible.builtin.command:
                 argv: [/usr/local/bin/minikube, kubectl, '--', apply, -f, '-']
                 stdin: "{{ lookup('ansible.builtin.file', 'runner-network.yml') }}"
+            - name: Configure Kubernetes job isolation
+              ansible.builtin.include_tasks: kubernetes-jobs.yml
+              when: hive_container_mode == 'kubernetes-novolume'
+            - name: Remove Kubernetes API egress permission for runners without hooks
+              ansible.builtin.command:
+                argv:
+                  - /usr/local/bin/minikube
+                  - kubectl
+                  - '--'
+                  - delete
+                  - networkpolicy
+                  - hive-runner-kube-api
+                  - --namespace=hive-runners
+                  - --ignore-not-found
+              when: hive_container_mode != 'kubernetes-novolume'
             - name: Install the existing-secret reference for ARC
               no_log: true
               ansible.builtin.command:
@@ -167,6 +193,23 @@
               ]
           register: hive_runners
           changed_when: false
+        - name: Inspect unfinished Kubernetes job and container action pods
+          tags: [inspect, drain]
+          when: hive_container_mode == 'kubernetes-novolume'
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/minikube
+              - kubectl
+              - '--'
+              - get
+              - pods
+              - --namespace=hive-runners
+              - --selector=hive-runners.net/workload=job
+              - --field-selector=status.phase!=Succeeded,status.phase!=Failed
+              - -o
+              - json
+          register: hive_job_pods
+          changed_when: false
         - name: Read host memory and load
           tags: [inspect, drain]
           ansible.builtin.shell: |
@@ -177,7 +220,10 @@
         - name: Emit the observed count
           tags: [inspect, drain]
           ansible.builtin.debug:
-            msg: 'HIVE_RUNNER_COUNT={{ (hive_runners.stdout | from_json)["items"] | length }};{{ hive_host_usage.stdout }}'
+            msg: 'HIVE_RUNNER_COUNT={{ [hive_runner_count | int, hive_job_pod_count | int] | max }};{{ hive_host_usage.stdout }}'
+          vars:
+            hive_runner_count: '{{ (hive_runners.stdout | from_json)["items"] | length }}'
+            hive_job_pod_count: '{{ (hive_job_pods.stdout | default("{}") | from_json)["items"] | default([]) | length }}'
         - name: Remove the idle ARC runner scale set from a spare host
           tags: [park]
           ansible.builtin.command:

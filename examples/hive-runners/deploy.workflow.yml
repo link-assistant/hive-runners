@@ -37,7 +37,7 @@ jobs:
           umask 077
           export HIVE_SSH_PRIVATE_KEY_FILE="$RUNNER_TEMP/hive-identity"
           printf '%s\n' "$SSH_IDENTITY" > "$HIVE_SSH_PRIVATE_KEY_FILE"
-          printf '%s\n' "$INVENTORY" > "$RUNNER_TEMP/hive-inventory.json"
+          printf '%s\n' "$INVENTORY" > "$RUNNER_TEMP/hive-inventory.lino"
           npm exec --yes --package="@link-assistant/hive-runners@$HIVE_RUNNERS_VERSION" -- \
-            hive-runners deploy --config hive-managed/config.json \
-            --inventory "$RUNNER_TEMP/hive-inventory.json"
+            hive-runners deploy --config hive-managed/config.lino \
+            --inventory "$RUNNER_TEMP/hive-inventory.lino"

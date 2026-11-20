@@ -4,9 +4,7 @@ metadata:
   name: hive-runner-isolation
   namespace: hive-runners
 spec:
-  podSelector:
-    matchLabels:
-      hive-runners.net/workload: runner
+  podSelector: {}
   policyTypes: [Ingress, Egress]
   egress:
     - to:

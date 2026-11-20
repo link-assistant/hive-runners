@@ -182,7 +182,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [ubuntu-24.04]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -272,35 +272,6 @@ jobs:
             examples/universal-app/android/app/build/outputs/**/*.apk
             examples/universal-app/android/app/build/outputs/**/*.aab
           if-no-files-found: error
-
-  ios-build:
-    name: Build iOS app
-    if: github.event_name == 'workflow_dispatch' && vars.EXAMPLE_APP_ENABLE_IOS_BUILD == 'true'
-    runs-on: macos-15
-    timeout-minutes: 30
-    concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-ios-build
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24.x'
-          cache: npm
-          cache-dependency-path: examples/universal-app/package-lock.json
-
-      - name: Install app dependencies
-        run: npm ci --prefix examples/universal-app --no-audit --no-fund
-
-      - name: Add iOS project
-        run: npm --prefix examples/universal-app run mobile:ios:add
-
-      - name: Build iOS project
-        run: npm --prefix examples/universal-app run mobile:ios:build
 
   # Regenerate example-app preview screenshots (docs/screenshots/example-app/*)
   # using browser-commander + Playwright so README/site images always reflect
@@ -499,7 +470,6 @@ jobs:
       - pages-deploy
       - desktop-package
       - android-build
-      - ios-build
       - preview-regen
       - preview-tools
     # actions: read lets the gate list this run's jobs and name the ones

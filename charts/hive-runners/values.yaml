@@ -3,9 +3,10 @@ image:
   tag: ''
 existingSecret: ''
 sshSecret: ''
+uiConfigMap: ''
+configLino: ''
 configJSON: ''
-config:
-  version: 1
+config: {}
 persistence:
   size: 2Gi
   existingClaim: ''
@@ -13,6 +14,17 @@ ingress:
   host: ''
   className: ''
   tlsSecret: ''
+monitoring:
+  serviceMonitor:
+    enabled: false
+    labels: {}
+    interval: 15s
+    secretName: ''
+    secretKey: HIVE_METRICS_KEY
+  grafanaDashboard:
+    enabled: false
+    labels:
+      grafana_dashboard: '1'
 resources:
   requests:
     cpu: 100m

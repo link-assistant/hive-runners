@@ -1,14 +1,22 @@
 {{- $name := printf "%s-hive" .Release.Name | trunc 63 | trimSuffix "-" -}}
-{{- $config := .Values.config | mustToJson -}}
+{{- $file := "config.lino" -}}
+{{- $config := default "(\n  version 1\n)\n" .Values.configLino -}}
 {{- if .Values.configJSON -}}
+{{- $file = "config.json" -}}
 {{- $config = .Values.configJSON | mustFromJson | mustToJson -}}
+{{- else if .Values.config -}}
+{{- $file = "config.json" -}}
+{{- $config = .Values.config | mustToJson -}}
+{{- end -}}
+{{- if and .Values.configLino (or .Values.configJSON .Values.config) -}}
+{{- fail "Provide configLino, configJSON, or config" -}}
 {{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $name }}
 data:
-  config.json: {{ $config | quote }}
+  {{ $file }}: {{ $config | quote }}
 ---
 {{- if not .Values.persistence.existingClaim }}
 apiVersion: v1
@@ -54,6 +62,7 @@ spec:
       containers:
         - name: control-plane
           image: {{ printf "%s:%s" (required "image.repository is required" .Values.image.repository) (required "image.tag is required" .Values.image.tag) | quote }}
+          args: ["serve", "--config", "/etc/hive/{{ $file }}"]
           ports:
             - { name: http, containerPort: 8080 }
           {{- if .Values.existingSecret }}
@@ -61,10 +70,16 @@ spec:
             - secretRef:
                 name: {{ .Values.existingSecret }}
           {{- end }}
-          {{- if .Values.sshSecret }}
+          {{- if or .Values.sshSecret .Values.uiConfigMap }}
           env:
+            {{- if .Values.sshSecret }}
             - name: HIVE_SSH_PRIVATE_KEY_FILE
               value: /var/run/hive-ssh/identity
+            {{- end }}
+            {{- if .Values.uiConfigMap }}
+            - name: HIVE_UI_DIR
+              value: /etc/hive-ui
+            {{- end }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -84,6 +99,9 @@ spec:
             {{- if .Values.sshSecret }}
             - { name: ssh, mountPath: /var/run/hive-ssh, readOnly: true }
             {{- end }}
+            {{- if .Values.uiConfigMap }}
+            - { name: ui, mountPath: /etc/hive-ui, readOnly: true }
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -100,11 +118,18 @@ spec:
             secretName: {{ .Values.sshSecret }}
             defaultMode: 0440
         {{- end }}
+        {{- if .Values.uiConfigMap }}
+        - name: ui
+          configMap:
+            name: {{ .Values.uiConfigMap | quote }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ $name }}
+  labels:
+    app.kubernetes.io/instance: {{ $name }}
 spec:
   selector:
     app.kubernetes.io/instance: {{ $name }}

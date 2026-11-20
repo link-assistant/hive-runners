@@ -54,7 +54,7 @@ nav,
   text-decoration: none;
   letter-spacing: -0.04em;
 }
-.brand span {
+.brand > span[aria-hidden='true'] {
   display: grid;
   place-items: center;
   width: 32px;
@@ -189,7 +189,7 @@ figcaption {
   justify-content: space-between;
   color: #493767;
 }
-figcaption span {
+figcaption > span {
   display: flex;
   align-items: center;
   gap: 8px;

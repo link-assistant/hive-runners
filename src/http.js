@@ -1,4 +1,5 @@
 import { URL } from 'node:url';
+import { formatNotation, linoMediaType, parseNotation } from './notation.js';
 export class HttpError extends Error {
   constructor(status, service) {
     super(`${service} returned HTTP ${status}`);
@@ -8,8 +9,23 @@ export class HttpError extends Error {
 
 export function httpClient(
   origin,
-  { headers = {}, fetcher = fetch, service = new URL(origin).hostname } = {}
+  {
+    headers = {},
+    fetcher = fetch,
+    service = new URL(origin).hostname,
+    notation = false,
+  } = {}
 ) {
+  const contentType = notation ? linoMediaType : 'application/json';
+  const accept = notation
+    ? `${linoMediaType}, application/json;q=0.9`
+    : contentType;
+  const encode = notation ? formatNotation : JSON.stringify;
+  function encodeBody(value) {
+    return value === undefined || typeof value === 'string'
+      ? value
+      : encode(value);
+  }
   return async (path, { method = 'GET', body, extraHeaders = {} } = {}) => {
     if (!path.startsWith('/') || path.startsWith('//')) {
       throw new Error('Expected an API path');
@@ -21,17 +37,12 @@ export function httpClient(
     const response = await fetcher(url, {
       method,
       headers: {
-        accept: 'application/json',
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        accept,
+        ...(body === undefined ? {} : { 'content-type': contentType }),
         ...headers,
         ...extraHeaders,
       },
-      body:
-        body === undefined
-          ? undefined
-          : typeof body === 'string'
-            ? body
-            : JSON.stringify(body),
+      body: encodeBody(body),
       redirect: 'error',
       signal: AbortSignal.timeout(25000),
     });
@@ -39,6 +50,15 @@ export function httpClient(
       await response.body?.cancel();
       throw new HttpError(response.status, service);
     }
-    return response.status === 204 ? null : response.json();
+    if (response.status === 204) {
+      return null;
+    }
+    if (
+      notation &&
+      response.headers.get('content-type')?.split(';')[0] === linoMediaType
+    ) {
+      return parseNotation(await response.text());
+    }
+    return response.json();
   };
 }

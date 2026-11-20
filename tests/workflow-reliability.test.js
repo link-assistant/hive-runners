@@ -314,7 +314,7 @@ describe('workflow concurrency policy', () => {
       '-${{ matrix.runtime }}-${{ matrix.os }}'
     );
 
-    for (const jobName of ['web-build', 'android-build', 'ios-build']) {
+    for (const jobName of ['web-build', 'android-build']) {
       expectCancellableCheckConcurrency(
         getJobBlock(exampleAppWorkflow, jobName),
         jobName
