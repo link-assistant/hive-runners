@@ -7,6 +7,7 @@ WORKDIR /app
 COPY --chown=node:node package.json ./
 COPY --chown=node:node bin/ bin/
 COPY --chown=node:node src/ src/
+COPY --chown=node:node docs/hive-runners.md docs/generated-cli.md docs/
 ENV HOST=0.0.0.0 PORT=8080 HIVE_STATE=/var/lib/hive/runner.sqlite HOME=/tmp
 USER node
 EXPOSE 8080

@@ -47,6 +47,35 @@ function authorize(config, env) {
   };
 }
 
+function githubSignatures(config, env) {
+  const poolsBySecret = new Map();
+  const paidPools = new Set(
+    Object.values(config.accounts).map(({ pool }) => pool)
+  );
+  for (const [name, pool] of Object.entries(config.pools)) {
+    const key = secret(pool.webhookSecretEnv, env);
+    const names = poolsBySecret.get(key) ?? new Set();
+    names.add(name);
+    poolsBySecret.set(key, names);
+  }
+  for (const names of poolsBySecret.values()) {
+    requireValue(
+      names.size === 1 || ![...names].some((name) => paidPools.has(name)),
+      'Each paid pool requires a unique GitHub webhook secret'
+    );
+  }
+  return poolsBySecret;
+}
+
+function signedPools(keys, bytes, signature) {
+  for (const [key, names] of keys) {
+    if (secureEqual(signature, `sha256=${digest(key, bytes)}`)) {
+      return names;
+    }
+  }
+  throw new RequestError(401, 'Invalid webhook signature');
+}
+
 async function body(request) {
   const chunks = [];
   let size = 0;
@@ -174,9 +203,7 @@ export function controlPlane(
   const config = validateConfig(input);
   const accountFor = authorize(config, env);
   const usage = ledger(store, config, now);
-  const githubSecret = Object.keys(config.pools).length
-    ? secret('HIVE_WEBHOOK_SECRET', env)
-    : null;
+  const githubKeys = githubSignatures(config, env);
   const stripeSecret =
     env.HIVE_STRIPE_SECRET_KEY && secret('HIVE_STRIPE_WEBHOOK_SECRET', env);
   const payments =
@@ -221,15 +248,16 @@ export function controlPlane(
     if (
       request.method === 'POST' &&
       path === '/webhooks/github' &&
-      githubSecret
+      githubKeys.size > 0
     ) {
       const bytes = await body(request);
-      gated(
-        `sha256=${digest(githubSecret, bytes)}`,
+      const pools = signedPools(
+        githubKeys,
+        bytes,
         request.headers['x-hub-signature-256']
       );
       if (request.headers['x-github-event'] === 'workflow_job') {
-        usage.ingest(parse(bytes));
+        usage.ingest(parse(bytes), pools);
       }
       return json(response, { received: true }, 202);
     }

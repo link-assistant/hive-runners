@@ -151,6 +151,26 @@ function spareSettings(pool, scope, provider) {
     : { spareHost: spareTarget(pool.spareHost, scope, provider) };
 }
 
+function poolCredentials(pool) {
+  return {
+    credentialsEnv: match(
+      pool.credentialsEnv ?? 'HIVE_ARC_CREDENTIALS',
+      environmentName,
+      'ARC credentials environment variable'
+    ),
+    groupTokenEnv: match(
+      pool.groupTokenEnv ?? 'HIVE_GITHUB_TOKEN',
+      environmentName,
+      'GitHub administration environment variable'
+    ),
+    webhookSecretEnv: match(
+      pool.webhookSecretEnv ?? 'HIVE_WEBHOOK_SECRET',
+      environmentName,
+      'GitHub webhook secret environment variable'
+    ),
+  };
+}
+
 function poolConfig(value, name, providers) {
   match(name, slug, 'pool name');
   const pool = object(value, name);
@@ -210,16 +230,7 @@ function poolConfig(value, name, providers) {
       86400,
       'fleet idle seconds'
     ),
-    credentialsEnv: match(
-      pool.credentialsEnv ?? 'HIVE_ARC_CREDENTIALS',
-      environmentName,
-      'ARC credentials environment variable'
-    ),
-    groupTokenEnv: match(
-      pool.groupTokenEnv ?? 'HIVE_GITHUB_TOKEN',
-      environmentName,
-      'GitHub administration environment variable'
-    ),
+    ...poolCredentials(pool),
     ...clusterSettings(pool),
     ...spareSettings(pool, scope, provider),
     selectedRepositories,

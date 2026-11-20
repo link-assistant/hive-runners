@@ -124,7 +124,7 @@ export function ledger(store, config, now = Date.now) {
     });
   }
 
-  function ingest(payload) {
+  function ingest(payload, authorizedPools) {
     const { action, repository, workflow_job: job } = payload;
     const repo = repository?.full_name;
     if (
@@ -140,7 +140,9 @@ export function ledger(store, config, now = Date.now) {
       ([, pool]) => job.labels.includes(pool.label) && belongsTo(pool, repo)
     );
     return (
-      matches.length === 1 && record(matches[0][0], repo, job, stages[action])
+      matches.length === 1 &&
+      authorizedPools.has(matches[0][0]) &&
+      record(matches[0][0], repo, job, stages[action])
     );
   }
 

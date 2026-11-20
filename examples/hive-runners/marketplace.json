@@ -3,6 +3,7 @@
   "pools": {
     "paid-linux": {
       "scope": "customer-org/customer-private-repo",
+      "webhookSecretEnv": "CUSTOMER_WEBHOOK_SECRET",
       "capacity": 1,
       "cpus": 2,
       "memoryMiB": 2560

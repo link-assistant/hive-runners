@@ -68,6 +68,13 @@ function githubRequest(payload, signature) {
   };
 }
 
+function signedEvent(payload, secret) {
+  return githubRequest(
+    payload,
+    `sha256=${digest(secret, JSON.stringify(payload))}`
+  );
+}
+
 async function withHttp(input, setup, test) {
   const store = openStore();
   const plane = controlPlane(input, { ...options, ...setup, store });
@@ -89,6 +96,10 @@ describe('control plane and usage', () => {
   it('serves the landing page and rejects missing keys or forged usage', async () => {
     await withHttp(config, {}, async (plane, request) => {
       expect((await request('/')).status).toBe(200);
+      expect((await request('/guide.html')).status).toBe(200);
+      expect(await (await request('/docs/generated-cli.md')).text()).toContain(
+        'Hive Runners CLI reference'
+      );
       expect((await request('/v1/offer')).status).toBe(401);
       expect(
         (
@@ -123,6 +134,61 @@ describe('control plane and usage', () => {
     });
   });
 
+  it('limits signed job events to pools with the matching webhook secret', async () => {
+    const otherSecret = 'other-webhook-secret';
+    const inputs = {
+      ...config,
+      pools: {
+        ...config.pools,
+        other: {
+          ...config.pools.jobs,
+          scope: 'org/other',
+          webhookSecretEnv: 'OTHER_WEBHOOK_SECRET',
+        },
+      },
+      accounts: {
+        ...config.accounts,
+        other: {
+          ...config.accounts.customer,
+          pool: 'other',
+          keyEnv: 'OTHER_KEY',
+        },
+      },
+    };
+    const env = {
+      ...options.env,
+      OTHER_KEY: 'y'.repeat(48),
+      OTHER_WEBHOOK_SECRET: otherSecret,
+    };
+    await withHttp(inputs, { env }, async (plane, request) => {
+      const forged = signedEvent(event('completed'), otherSecret);
+      expect((await request('/webhooks/github', forged)).status).toBe(202);
+      expect(plane.usage.credit('customer')).toBe(100);
+      const ownEvent = event('completed');
+      ownEvent.repository.full_name = 'org/other';
+      ownEvent.workflow_job.labels = ['other'];
+      ownEvent.workflow_job.runner_name = 'other-dp8m9-runner-fixture';
+      await request('/webhooks/github', signedEvent(ownEvent, otherSecret));
+      expect(plane.usage.credit('other')).toBe(80);
+      await request('/webhooks/github', githubRequest(event('completed')));
+      expect(plane.usage.credit('customer')).toBe(80);
+    });
+    const store = openStore();
+    try {
+      expect(() =>
+        controlPlane(inputs, {
+          ...options,
+          store,
+          env: { ...env, OTHER_WEBHOOK_SECRET: webhookSecret },
+        })
+      ).toThrow('Each paid pool requires a unique GitHub webhook secret');
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe('Stripe payments', () => {
   it('settles Stripe credit only once and handles refunds before fulfillment', async () => {
     const env = {
       ...options.env,
@@ -191,7 +257,7 @@ describe('control plane and usage', () => {
   });
 });
 
-describe('fleet and federation', () => {
+describe('fleet reconciliation', () => {
   it('activates, provisions, drains across two observations and retires a machine', async () => {
     let time = epoch;
     let runners = 1;
@@ -251,8 +317,10 @@ describe('fleet and federation', () => {
       }
     );
   });
+});
 
-  it('finds a compatible supplier and requests a fixed-expiry wholesale allocation', async () => {
+describe('upstream federation', () => {
+  it('tries compatible suppliers in price order and pins the accepted allocation', async () => {
     const hub = {
       ...config,
       providers: {},
@@ -263,6 +331,11 @@ describe('fleet and federation', () => {
           upstreams: [
             {
               origin: 'https://supplier.example.com',
+              keyEnv: 'UPSTREAM_KEY',
+              maxRate: 8,
+            },
+            {
+              origin: 'https://lower-price.example.com',
               keyEnv: 'UPSTREAM_KEY',
               maxRate: 8,
             },
@@ -277,17 +350,26 @@ describe('fleet and federation', () => {
       {
         env: { ...options.env, UPSTREAM_KEY: 'supplier-credential-fixture' },
         fetcher: async (url, args) => {
-          operations.push([url.pathname, args.body && JSON.parse(args.body)]);
+          const cheaper = url.hostname === 'lower-price.example.com';
+          operations.push([
+            `${url.hostname}${url.pathname}`,
+            args.body && JSON.parse(args.body),
+          ]);
+          if (cheaper && args.method === 'PUT') {
+            return globalThis.Response.json({}, { status: 409 });
+          }
           if (args.method === 'DELETE') {
             return globalThis.Response.json({ active: false, draining });
           }
           return globalThis.Response.json({
             available: true,
             currency: 'usd',
-            rate: 7,
+            rate: cheaper ? 6 : 7,
             scope: 'org/repo',
             label: 'jobs',
             capacity: 1,
+            activation: null,
+            draining: false,
           });
         },
       },
@@ -300,30 +382,26 @@ describe('fleet and federation', () => {
         expect((await lease.json()).route).toBe('upstream');
         await plane.reconcile();
         await plane.reconcile();
+        const allocation = {
+          expires: epoch + 900000,
+          rateCeiling: 8,
+          scope: 'org/repo',
+          label: 'jobs',
+        };
         expect(operations).toEqual([
-          ['/v1/offer', undefined],
-          [
-            '/v1/wholesale',
-            {
-              expires: epoch + 900000,
-              rateCeiling: 8,
-              scope: 'org/repo',
-              label: 'jobs',
-            },
-          ],
-          [
-            '/v1/wholesale',
-            {
-              expires: epoch + 900000,
-              rateCeiling: 8,
-              scope: 'org/repo',
-              label: 'jobs',
-            },
-          ],
+          ['supplier.example.com/v1/offer', undefined],
+          ['lower-price.example.com/v1/offer', undefined],
+          ['lower-price.example.com/v1/wholesale', allocation],
+          ['lower-price.example.com/v1/offer', undefined],
+          ['supplier.example.com/v1/wholesale', allocation],
+          ['supplier.example.com/v1/wholesale', allocation],
         ]);
         await request('/v1/activation', { method: 'DELETE', headers: auth });
         await plane.reconcile();
-        expect(operations.at(-1)).toEqual(['/v1/wholesale', undefined]);
+        expect(operations.at(-1)).toEqual([
+          'supplier.example.com/v1/wholesale',
+          undefined,
+        ]);
         const activate = () =>
           request('/v1/activation', {
             method: 'PUT',
@@ -387,4 +465,97 @@ describe('spare machine sales', () => {
       }
     );
   });
+});
+
+it('connects two control planes and meters the same job at retail and wholesale rates', async () => {
+  const pool = { scope: 'org/repo', capacity: 1 };
+  const account = config.accounts.customer;
+  const supplierKey = 's'.repeat(48);
+  const supplierSecret = 'supplier-webhook-fixture';
+  const spareHost = {
+    ip: '192.0.2.11',
+    hostKey: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'A'.repeat(43)}`,
+  };
+  const supplier = {
+    version: 1,
+    pools: { jobs: { ...pool, spareHost } },
+    accounts: { customer: { ...account, rate: 4 } },
+  };
+  const hub = {
+    version: 1,
+    pools: { jobs: pool },
+    accounts: {
+      customer: {
+        ...account,
+        upstreams: [
+          {
+            origin: 'https://supplier.example.com',
+            keyEnv: 'SUPPLIER_KEY',
+            maxRate: 5,
+          },
+        ],
+      },
+    },
+  };
+  const operations = [];
+  await withHttp(
+    supplier,
+    {
+      env: {
+        ...options.env,
+        CUSTOMER_KEY: supplierKey,
+        HIVE_WEBHOOK_SECRET: supplierSecret,
+      },
+      scaling: {
+        host: async (_pool, _target, operation = 'deploy') => {
+          operations.push(operation);
+          return { runners: 0 };
+        },
+      },
+    },
+    async (reseller, supplierRequest) => {
+      await withHttp(
+        hub,
+        {
+          env: { ...options.env, SUPPLIER_KEY: supplierKey },
+          fetcher: (url, args) => supplierRequest(url.pathname, args),
+        },
+        async (retail, hubRequest) => {
+          const activation = await hubRequest('/v1/activation', {
+            method: 'PUT',
+            headers: auth,
+            body: '{"minutes":15}',
+          });
+          expect((await activation.json()).route).toBe('upstream');
+          await retail.reconcile();
+          for (const action of ['queued', 'completed', 'completed']) {
+            const job = event(action);
+            expect(
+              (await hubRequest('/webhooks/github', githubRequest(job))).status
+            ).toBe(202);
+            expect(
+              (
+                await supplierRequest(
+                  '/webhooks/github',
+                  signedEvent(job, supplierSecret)
+                )
+              ).status
+            ).toBe(202);
+            await reseller.reconcile();
+          }
+          expect(operations).toContain('deploy');
+          expect(retail.scale.poolMachines('jobs')).toEqual([]);
+          expect(retail.usage.credit('customer')).toBe(80);
+          expect(reseller.usage.credit('customer')).toBe(92);
+          await hubRequest('/v1/activation', {
+            method: 'DELETE',
+            headers: auth,
+          });
+          await retail.reconcile();
+          await reseller.reconcile();
+          expect(operations).toContain('drain');
+        }
+      );
+    }
+  );
 });

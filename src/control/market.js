@@ -1,5 +1,5 @@
 import { integer, requireValue, secret } from '../config.js';
-import { httpClient } from '../http.js';
+import { HttpError, httpClient } from '../http.js';
 
 export class RequestError extends Error {
   constructor(status, message) {
@@ -37,6 +37,104 @@ function priceMatches(remote, peer, own) {
   );
 }
 
+function suppliers(store, config, { env, fetcher, active, funded }) {
+  function peerClient(peer) {
+    return httpClient(peer.origin, {
+      headers: { authorization: `Bearer ${secret(peer.keyEnv, env)}` },
+      fetcher,
+    });
+  }
+
+  async function compatiblePeers(account, pool) {
+    const offers = [];
+    for (const peer of account.upstreams) {
+      try {
+        const remote = await peerClient(peer)('/v1/offer');
+        if (remote.available && priceMatches(remote, peer, pool)) {
+          offers.push({ peer, rate: remote.rate });
+        }
+      } catch {
+        // An unavailable offer does not prevent queries to other suppliers.
+      }
+    }
+    offers.sort((a, b) => a.rate - b.rate);
+    return offers.map(({ peer }) => peer);
+  }
+
+  async function claimPeer(id, peer, pool) {
+    const current = active(id);
+    if (!current || !funded(id) || current.route !== 'upstream') {
+      return;
+    }
+    if (!current.peer) {
+      store.put('lease', id, { ...current, peer: peer.origin });
+    }
+    await peerClient(peer)('/v1/wholesale', {
+      method: 'PUT',
+      body: {
+        expires: current.expires,
+        rateCeiling: peer.maxRate,
+        scope: pool.scope,
+        label: pool.label,
+      },
+    });
+  }
+
+  async function releaseRejectedClaim(id, peer, error) {
+    if (!(error instanceof HttpError) || ![402, 409].includes(error.status)) {
+      throw error;
+    }
+    const { activation, draining } = await peerClient(peer)('/v1/offer');
+    // Keep the supplier pinned if it could be holding capacity for this hub.
+    if (activation !== null || draining !== false) {
+      throw error;
+    }
+    const current = store.get('lease', id);
+    if (current?.peer === peer.origin) {
+      store.put('lease', id, { ...current, peer: null });
+    }
+  }
+
+  async function provisionUpstream(id, lease) {
+    const account = config.accounts[id];
+    const pool = config.pools[account.pool];
+    if (lease.peer) {
+      const peer = account.upstreams.find(
+        ({ origin }) => origin === lease.peer
+      );
+      requireValue(peer, 'Restore the configured upstream for this activation');
+      return claimPeer(id, peer, pool);
+    }
+    for (const peer of await compatiblePeers(account, pool)) {
+      try {
+        return await claimPeer(id, peer, pool);
+      } catch (error) {
+        await releaseRejectedClaim(id, peer, error);
+      }
+    }
+    throw new Error(
+      'No upstream can supply the requested repository, label and price'
+    );
+  }
+
+  async function releaseUpstream(id, lease) {
+    const peer = config.accounts[id].upstreams.find(
+      ({ origin }) => origin === lease.peer
+    );
+    requireValue(
+      peer,
+      'Restore the supplier configuration to release its outstanding activation'
+    );
+    const request = peerClient(peer);
+    const { draining } = await request('/v1/wholesale', { method: 'DELETE' });
+    if (draining === false && store.get('lease', id)?.peer === lease.peer) {
+      store.delete('lease', id);
+    }
+  }
+
+  return { provisionUpstream, releaseUpstream };
+}
+
 export function market(
   store,
   config,
@@ -56,18 +154,22 @@ export function market(
     );
   };
 
+  const upstream = suppliers(store, config, { env, fetcher, active, funded });
+
   function offer(id) {
     const { pool, rate } = config.accounts[id];
     const { scope, label, capacity } = config.pools[pool];
+    const activation = active(id);
+    const draining = fleet.poolMachines(pool).length > 0 && !activation;
     return {
       scope,
       label,
       capacity,
       rate,
       currency: 'usd',
-      available: funded(id) && fleet.hasRoom(pool),
-      activation: active(id),
-      draining: fleet.poolMachines(pool).length > 0 && !active(id),
+      available: !activation && !draining && funded(id) && fleet.hasRoom(pool),
+      activation,
+      draining,
       credit: ledger.credit(id),
     };
   }
@@ -92,72 +194,6 @@ export function market(
     return store.put('lease', id, lease);
   }
 
-  function peerClient(peer) {
-    return httpClient(peer.origin, {
-      headers: { authorization: `Bearer ${secret(peer.keyEnv, env)}` },
-      fetcher,
-    });
-  }
-
-  async function selectPeer(id, account) {
-    const own = offer(id);
-    const offers = [];
-    for (const peer of account.upstreams) {
-      try {
-        const remote = await peerClient(peer)('/v1/offer');
-        if (remote.available && priceMatches(remote, peer, own)) {
-          offers.push({ peer, rate: remote.rate });
-        }
-      } catch {
-        // An unavailable offer does not prevent queries to other suppliers.
-      }
-    }
-    offers.sort((a, b) => a.rate - b.rate);
-    return offers[0]?.peer;
-  }
-
-  async function provisionUpstream(id, lease) {
-    const account = config.accounts[id];
-    const peer = lease.peer
-      ? account.upstreams.find(({ origin }) => origin === lease.peer)
-      : await selectPeer(id, account);
-    requireValue(
-      peer,
-      'No upstream can supply the requested repository, label and price'
-    );
-    const current = active(id);
-    if (!current || !funded(id) || current.route !== 'upstream') {
-      return;
-    }
-    if (!current.peer) {
-      store.put('lease', id, { ...current, peer: peer.origin });
-    }
-    await peerClient(peer)('/v1/wholesale', {
-      method: 'PUT',
-      body: {
-        expires: current.expires,
-        rateCeiling: peer.maxRate,
-        scope: config.pools[account.pool].scope,
-        label: config.pools[account.pool].label,
-      },
-    });
-  }
-
-  async function releaseUpstream(id, lease) {
-    const peer = config.accounts[id].upstreams.find(
-      ({ origin }) => origin === lease.peer
-    );
-    requireValue(
-      peer,
-      'Restore the supplier configuration to release its outstanding activation'
-    );
-    const request = peerClient(peer);
-    const { draining } = await request('/v1/wholesale', { method: 'DELETE' });
-    if (draining === false && store.get('lease', id)?.peer === lease.peer) {
-      store.delete('lease', id);
-    }
-  }
-
   function withdraw(id, wholesale = false) {
     const old = store.get('lease', id);
     if (old?.wholesale === wholesale) {
@@ -175,13 +211,13 @@ export function market(
         if (lease && funded(id)) {
           routes[pool] = lease.route;
           if (lease.route === 'upstream') {
-            await provisionUpstream(id, lease);
+            await upstream.provisionUpstream(id, lease);
           }
         } else {
           const previous = store.get('lease', id);
           if (previous?.peer) {
             withdraw(id);
-            await releaseUpstream(id, previous);
+            await upstream.releaseUpstream(id, previous);
           }
         }
       } catch (error) {

@@ -8,11 +8,14 @@ import {
   cliReference,
   deploy,
   githubClient,
+  propose,
   providerClient,
   renderInfrastructure,
   terraformPlan,
   validateConfig,
-} from '../src/index.js';
+} from '@link-assistant/hive-runners';
+import { runProcess } from '../src/process.js';
+import { withWorkspace } from '../src/workspace.js';
 
 describe('Hive Runners infrastructure', () => {
   it('renders both providers and preserves existing Terraform on reconfiguration', async () => {
@@ -97,6 +100,45 @@ describe('Hive Runners infrastructure', () => {
         pools: { jobs: { scope: 'org/repo', maxMachines: 2 } },
       })
     ).toThrow();
+  });
+
+  it('proposes a managed configuration without changing the caller worktree', async () => {
+    await withWorkspace(async ({ directory }) => {
+      const upstream = join(directory, 'upstream.git');
+      const cwd = join(directory, 'author');
+      await runProcess('git', ['init', '--bare', upstream]);
+      await runProcess('git', ['init', '-b', 'main', cwd]);
+      const git = (args) => runProcess('git', args, { cwd });
+      await git(['config', 'user.email', 'operator@example.com']);
+      await git(['config', 'user.name', 'Hive Test Operator']);
+      await git(['commit', '--allow-empty', '-m', 'Initial configuration']);
+      await git(['remote', 'add', 'origin', upstream]);
+      await git(['push', 'origin', 'main']);
+      const branch = 'hive/test-proposal';
+      const url = await propose(
+        { version: 1, pools: { jobs: { scope: 'org/private-repo' } } },
+        {
+          cwd,
+          branch,
+          async run(program, args, options) {
+            if (program === 'git') {
+              return runProcess(program, args, options);
+            }
+            expect(program).toBe('gh');
+            expect(args.slice(0, 3)).toEqual(['pr', 'create', '--draft']);
+            const description = await readFile(args.at(-1), 'utf8');
+            expect(description).toContain('org/private-repo');
+            expect(description).toContain('hive-managed/config.json');
+            return 'https://example.com/pull/1';
+          },
+        }
+      );
+      expect(url).toBe('https://example.com/pull/1');
+      expect(await git(['status', '--porcelain'])).toBe('');
+      expect(
+        await git(['ls-remote', 'origin', `refs/heads/${branch}`])
+      ).toContain(`refs/heads/${branch}`);
+    });
   });
 });
 

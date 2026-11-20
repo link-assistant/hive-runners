@@ -29,6 +29,7 @@ export async function propose(
   const git = (args, options = {}) => run('git', args, { cwd, ...options });
   await git([
     'fetch',
+    '--',
     'origin',
     `refs/heads/${base}:refs/remotes/origin/${base}`,
   ]);
@@ -38,6 +39,7 @@ export async function propose(
       'worktree',
       'add',
       '--detach',
+      '--',
       checkout,
       `refs/remotes/origin/${base}`,
     ]);
@@ -74,7 +76,7 @@ export async function propose(
         ['commit', '-m', 'chore: update managed Hive Runners configuration'],
         work
       );
-      await git(['push', 'origin', `HEAD:refs/heads/${branch}`], work);
+      await git(['push', '--', 'origin', `HEAD:refs/heads/${branch}`], work);
       return (
         await run(
           'gh',
@@ -95,7 +97,7 @@ export async function propose(
         )
       ).trim();
     } finally {
-      await git(['worktree', 'remove', '--force', checkout]);
+      await git(['worktree', 'remove', '--force', '--', checkout]);
     }
   });
 }

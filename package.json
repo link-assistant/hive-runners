@@ -3,8 +3,8 @@
   "version": "0.11.31",
   "description": "Autoscale private GitHub Actions runners on Minikube and budget VPS fleets",
   "type": "module",
-  "main": "src/index.js",
-  "types": "src/index.d.ts",
+  "main": "src/hive.js",
+  "types": "src/hive.d.ts",
   "bin": {
     "example-package-name": "./bin/example-package-name.js",
     "hive-runners": "./bin/hive-runners.js"
@@ -22,8 +22,12 @@
   ],
   "exports": {
     ".": {
-      "types": "./src/index.d.ts",
-      "import": "./src/index.js"
+      "browser": {
+        "types": "./src/index.d.ts",
+        "default": "./src/index.js"
+      },
+      "types": "./src/hive.d.ts",
+      "import": "./src/hive.js"
     }
   },
   "scripts": {

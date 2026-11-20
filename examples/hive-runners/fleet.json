@@ -35,6 +35,7 @@
       "scope": "customer-org/customer-private-repo",
       "credentialsEnv": "CUSTOMER_ARC_AUTH",
       "groupTokenEnv": "CUSTOMER_GITHUB_TOKEN",
+      "webhookSecretEnv": "CUSTOMER_WEBHOOK_SECRET",
       "provider": "hourly",
       "capacity": 1,
       "cpus": 2,
