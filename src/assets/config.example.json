@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "prefix": "hive",
+  "pools": {
+    "private-linux": {
+      "scope": "your-org/your-private-repo",
+      "maxMachines": 1,
+      "capacity": 2,
+      "warmRunners": 0
+    }
+  }
+}

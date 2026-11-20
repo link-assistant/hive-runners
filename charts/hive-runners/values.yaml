@@ -1,0 +1,22 @@
+image:
+  repository: ''
+  tag: ''
+existingSecret: ''
+sshSecret: ''
+configJSON: ''
+config:
+  version: 1
+persistence:
+  size: 2Gi
+  existingClaim: ''
+ingress:
+  host: ''
+  className: ''
+  tlsSecret: ''
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: '1'
+    memory: 512Mi

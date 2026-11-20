@@ -1,16 +1,21 @@
 {
-  "name": "@link-foundation/example-package-name",
+  "name": "@link-assistant/hive-runners",
   "version": "0.11.31",
-  "description": "A JavaScript/TypeScript package template for AI-driven development",
+  "description": "Autoscale private GitHub Actions runners on Minikube and budget VPS fleets",
   "type": "module",
   "main": "src/index.js",
   "types": "src/index.d.ts",
   "bin": {
-    "example-package-name": "./bin/example-package-name.js"
+    "example-package-name": "./bin/example-package-name.js",
+    "hive-runners": "./bin/hive-runners.js"
   },
   "files": [
     "bin/",
     "src/",
+    "charts/hive-runners",
+    "docs/generated-cli.md",
+    "docs/hive-runners.md",
+    "examples/hive-runners",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"
@@ -44,10 +49,11 @@
     "changeset:status": "changeset status --since=origin/main"
   },
   "keywords": [
-    "template",
-    "javascript",
-    "typescript",
-    "ai-driven"
+    "github-actions",
+    "self-hosted-runners",
+    "autoscaling",
+    "minikube",
+    "terraform"
   ],
   "author": "",
   "license": "Unlicense",
@@ -61,10 +67,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/link-foundation/js-ai-driven-development-pipeline-template.git"
+    "url": "git+https://github.com/link-assistant/hive-runners.git"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.3",
