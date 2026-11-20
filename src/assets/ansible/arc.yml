@@ -1,0 +1,178 @@
+---
+- name: Maintain an isolated ARC instance on a Linux machine
+  hosts: all
+  become: true
+  gather_facts: false
+  vars_files: [versions.yml]
+  tasks:
+    - name: Prepare the machine and launch Minikube
+      tags: [deploy]
+      ansible.builtin.import_tasks: bootstrap.yml
+    - name: Manage ARC with the private cluster credentials
+      become_user: '{{ hive_user }}'
+      environment:
+        HOME: '{{ hive_home }}'
+        KUBECONFIG: '{{ hive_kubeconfig }}'
+      block:
+        - name: Install the ARC controller and runner set
+          tags: [deploy]
+          block:
+            - name: Install the official ARC controller
+              ansible.builtin.command:
+                argv:
+                  - /usr/local/bin/helm
+                  - upgrade
+                  - --install
+                  - hive-arc
+                  - oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller
+                  - --version
+                  - '{{ hive_arc_version }}'
+                  - --namespace
+                  - hive-system
+                  - --create-namespace
+                  - --set
+                  - serviceAccount.name=hive-arc-gha-rs-controller
+                  - --wait
+            - name: Configure pool admission, network and job resources
+              ansible.builtin.import_tasks: pool-policy.yml
+            - name: Remove Kubernetes API egress permission for runners without hooks
+              ansible.builtin.command:
+                argv:
+                  - /usr/local/bin/minikube
+                  - -p
+                  - '{{ hive_profile }}'
+                  - kubectl
+                  - '--'
+                  - delete
+                  - networkpolicy
+                  - hive-runner-kube-api
+                  - --namespace=hive-runners
+                  - --ignore-not-found
+              when: hive_container_mode != 'kubernetes-novolume'
+            - name: Install the existing-secret reference for ARC
+              no_log: true
+              ansible.builtin.command:
+                argv:
+                  [
+                    /usr/local/bin/minikube,
+                    -p,
+                    '{{ hive_profile }}',
+                    kubectl,
+                    '--',
+                    apply,
+                    --server-side,
+                    -f,
+                    '-',
+                  ]
+                stdin: >-
+                  {{ {'apiVersion': 'v1', 'kind': 'Secret',
+                    'metadata': {'name': 'hive-arc-auth', 'namespace': 'hive-runners'},
+                    'type': 'Opaque',
+                    'stringData': lookup('ansible.builtin.env', 'HIVE_RUNNER_AUTH_JSON') | from_json} | to_json }}
+            - name: Install the official ARC runner scale set
+              ansible.builtin.command:
+                argv:
+                  - /usr/local/bin/helm
+                  - upgrade
+                  - --install
+                  - hive-pool
+                  - oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+                  - --version
+                  - '{{ hive_arc_version }}'
+                  - --namespace
+                  - hive-runners
+                  - --values
+                  - '-'
+                  - --wait
+                stdin: '{{ hive_arc_values | to_json }}'
+        - name: Stop ARC from assigning additional runner pods
+          tags: [drain]
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/minikube
+              - -p
+              - '{{ hive_profile }}'
+              - kubectl
+              - '--'
+              - patch
+              - autoscalingrunnersets.actions.github.com
+              - '{{ hive_arc_values.runnerScaleSetName }}'
+              - --namespace=hive-runners
+              - --type=merge
+              - '--patch={"spec":{"minRunners":0,"maxRunners":0}}'
+        - name: Inspect all ephemeral runners including pending runners
+          tags: [inspect, drain]
+          ansible.builtin.command:
+            argv:
+              [
+                /usr/local/bin/minikube,
+                -p,
+                '{{ hive_profile }}',
+                kubectl,
+                '--',
+                get,
+                ephemeralrunners.actions.github.com,
+                --namespace=hive-runners,
+                -o,
+                json,
+              ]
+          register: hive_runners
+          changed_when: false
+        - name: Inspect unfinished Kubernetes job and container action pods
+          tags: [inspect, drain]
+          when: hive_container_mode == 'kubernetes-novolume'
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/minikube
+              - -p
+              - '{{ hive_profile }}'
+              - kubectl
+              - '--'
+              - get
+              - pods
+              - --namespace=hive-runners
+              - --selector=hive-runners.net/workload=job
+              - --field-selector=status.phase!=Succeeded,status.phase!=Failed
+              - -o
+              - json
+          register: hive_job_pods
+          changed_when: false
+        - name: Emit observed ARC runner and host metrics
+          tags: [inspect, drain]
+          ansible.builtin.import_tasks: inspect.yml
+          vars:
+            hive_observed_pods: '{{ [hive_runner_count | int, hive_job_pod_count | int] | max }}'
+            hive_runner_count: '{{ (hive_runners.stdout | from_json)["items"] | length }}'
+            hive_job_pod_count: '{{ (hive_job_pods.stdout | default("{}") | from_json)["items"] | default([]) | length }}'
+        - name: Remove the idle ARC runner scale set from a spare host
+          tags: [park]
+          when: hive_profile == 'minikube'
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/helm
+              - uninstall
+              - hive-pool
+              - --namespace
+              - hive-runners
+              - --ignore-not-found
+              - --wait
+        - name: Remove the idle pool credential secret
+          tags: [park]
+          when: hive_profile == 'minikube'
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/minikube
+              - -p
+              - '{{ hive_profile }}'
+              - kubectl
+              - '--'
+              - delete
+              - secret
+              - hive-arc-auth
+              - --namespace=hive-runners
+              - --ignore-not-found
+        - name: Remove the idle shared ARC Minikube profile
+          tags: [park]
+          when: hive_profile != 'minikube'
+          ansible.builtin.command:
+            argv: [/usr/local/bin/minikube, -p, '{{ hive_profile }}', delete]

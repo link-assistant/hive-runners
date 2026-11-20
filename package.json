@@ -1,24 +1,33 @@
 {
-  "name": "@link-foundation/example-package-name",
+  "name": "@link-assistant/hive-runners",
   "version": "0.11.31",
-  "description": "A JavaScript/TypeScript package template for AI-driven development",
+  "description": "Autoscale private GitHub Actions and GitLab CI runners on Linux CPU and GPU fleets",
   "type": "module",
-  "main": "src/index.js",
-  "types": "src/index.d.ts",
+  "main": "src/hive.js",
+  "types": "src/hive.d.ts",
   "bin": {
-    "example-package-name": "./bin/example-package-name.js"
+    "example-package-name": "./bin/example-package-name.js",
+    "hive-runners": "./bin/hive-runners.js"
   },
   "files": [
     "bin/",
     "src/",
+    "charts/hive-runners",
+    "docs/generated-cli.md",
+    "docs/hive-runners.md",
+    "examples/hive-runners",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"
   ],
   "exports": {
     ".": {
-      "types": "./src/index.d.ts",
-      "import": "./src/index.js"
+      "browser": {
+        "types": "./src/index.d.ts",
+        "default": "./src/index.js"
+      },
+      "types": "./src/hive.d.ts",
+      "import": "./src/hive.js"
     }
   },
   "scripts": {
@@ -44,10 +53,13 @@
     "changeset:status": "changeset status --since=origin/main"
   },
   "keywords": [
-    "template",
-    "javascript",
-    "typescript",
-    "ai-driven"
+    "github-actions",
+    "gitlab-ci",
+    "gpu",
+    "self-hosted-runners",
+    "autoscaling",
+    "minikube",
+    "terraform"
   ],
   "author": "",
   "license": "Unlicense",
@@ -61,10 +73,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/link-foundation/js-ai-driven-development-pipeline-template.git"
+    "url": "git+https://github.com/link-assistant/hive-runners.git"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.3",
@@ -104,5 +116,12 @@
   "overrides": {
     "minimatch@>=7 <11": "^11.0.4",
     "glob@>=9 <=14.0.1": "^14.0.2"
+  },
+  "dependencies": {
+    "@link-foundation/link-cli-client": "0.5.0",
+    "@link-foundation/ui-core": "0.1.0",
+    "@link-foundation/ui-dom": "0.1.0",
+    "links-notation": "0.27.1",
+    "lino-objects-codec": "0.9.5"
   }
 }

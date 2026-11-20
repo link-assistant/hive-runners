@@ -1,0 +1,14 @@
+---
+- name: Read host memory, load and available disk
+  ansible.builtin.shell: |
+    set -euo pipefail
+    awk '/^MemAvailable:/ {printf "%d;", $2 / 1024}' /proc/meminfo
+    awk '{printf "%s;", $1}' /proc/loadavg
+    df -Pm "$(docker info --format '{{ '{{.DockerRootDir}}' }}')" | awk 'NR == 2 {print $4}'
+  args:
+    executable: /bin/bash
+  register: hive_host_usage
+  changed_when: false
+- name: Emit the observed count
+  ansible.builtin.debug:
+    msg: 'HIVE_RUNNER_COUNT={{ hive_observed_pods }};{{ hive_host_usage.stdout }}'

@@ -1,3 +1,6 @@
 # Shell scripts and Git hooks require LF on every platform.
 *.sh text eol=lf
 .husky/** text eol=lf
+
+# Match the bytes emitted by `hive-runners docs` on every platform.
+docs/generated-cli.md text eol=lf

@@ -286,15 +286,14 @@ jobs:
       - name: Check code duplication
         run: npm run check:duplication
 
-  # Test matrix: 3 runtimes (Node.js, Bun, Deno) x 3 OS (Ubuntu, macOS, Windows)
+  # Test matrix: Node.js, Bun and Deno on Ubuntu
   # IMPORTANT: Tests must validate the ACTUAL merge result, not a stale merge preview.
   # See docs/case-studies/issue-23 for why this is critical.
   # Fast-fail: slow test matrix only runs after fast checks pass (hive-mind principle #5)
   test:
     name: Test runtimes
     runs-on: ${{ matrix.os }}
-    # Typical run: <1min per runtime/OS on warm runners, with Windows
-    # sometimes slower on cold starts. Each test step owns an explicit
+    # Each test step owns an explicit
     # budget below (see scripts/run-with-budget-warning.sh); this cap is
     # only the backstop behind those budgets, sized so the budgets always
     # expire first. A job killed by timeout-minutes reports *cancelled*,
@@ -331,7 +330,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [ubuntu-24.04]
         runtime: [node, bun, deno]
     steps:
       - uses: actions/checkout@v7

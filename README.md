@@ -1,33 +1,34 @@
-# js-ai-driven-development-pipeline-template
+# Hive Runners
 
-A comprehensive template for AI-driven JavaScript/TypeScript development with full CI/CD pipeline support.
+Hive Runners provisions private GitHub Actions and GitLab CI pools using GitHub’s official Actions Runner Controller (ARC) and GitLab Runner. Each Linux fleet machine runs Minikube and can expose NVIDIA GPUs to jobs. The control plane can provision and retire machines through Contabo or Hetzner Cloud, or deploy pools to an existing SSH inventory.
 
-This repository publishes the real test package
-`@link-foundation/example-package-name` so the template release pipeline is
-validated end to end with npm trusted publishing.
-
-## Features
-
-- **Multi-runtime support**: Works with Bun, Node.js, and Deno
-- **Universal testing**: Uses [test-anywhere](https://github.com/link-foundation/test-anywhere) for cross-runtime tests
-- **Automated releases**: Changesets-based versioning with GitHub Actions
-- **Optional Docker Hub publishing**: Docker images can be published after the matching npm version is visible
-- **Universal app example**: React UI for the package API with GitHub Pages, Electron, and Capacitor build paths
-- **Code quality**: ESLint + Prettier with pre-commit hooks via Husky
-- **Package manager agnostic**: Works with bun, npm, yarn, pnpm, and deno
-- **Broken link checks**: Automated link validation with [lychee](https://github.com/lycheeverse/lychee-action) and Web Archive fallback suggestions
+The same control plane can sell prepaid runner minutes, sell spare fleet quota, or buy capacity from configured Hive Runners peers. The landing page and customer portal ship with the Docker image and Helm chart.
 
 ## Quick Start
 
-### Using This Template
+Use Node.js 24 or newer and clone this repository to try the CLI.
 
-1. Click "Use this template" on GitHub to create a new repository
-2. Clone your new repository
-3. Update `package.json` with your package name and description
-4. Install dependencies: `bun install`
-5. Start developing!
+```bash
+npm ci
+node bin/hive-runners.js init
+node bin/hive-runners.js capacity
+node bin/hive-runners.js render
+node bin/hive-runners.js --help
+```
 
-### Development
+Replace the example scope with your private repository. To deploy to an existing Ubuntu VPS, supply an inventory and ARC credentials. A larger fleet can use Terraform for baseline machines and the API reconciler for additional capacity.
+
+```bash
+node bin/hive-runners.js deploy --inventory ./inventory.lino
+```
+
+## Configuration
+
+The operator guide covers SSH and platform credentials, mixed hosts, GPU profiles, deployment, monitoring, billing, and federation. [Operator guide](docs/hive-runners.md) · [CLI reference](docs/generated-cli.md) · [Issue case study](docs/case-studies/issue-1/README.md)
+
+## Development
+
+The runner package is `@link-assistant/hive-runners`. Existing template examples and development tools remain in this repository.
 
 ```bash
 # Install dependencies
@@ -202,7 +203,7 @@ See [BEST-PRACTICES.md](docs/BEST-PRACTICES.md) for detailed explanations of eac
 
 #### Hosted Runner Capacity
 
-GitHub sometimes cannot hand out a hosted runner, most often macOS arm64. It
+GitHub sometimes cannot hand out a hosted runner. It
 then gives up with "The job was not acquired by Runner of type hosted even
 after multiple attempts", and the job ends cancelled or failed with no runner
 and no steps. No code ran, so the template treats it as infrastructure:
@@ -217,10 +218,8 @@ and no steps. No code ran, so the template treats it as infrastructure:
   branch supersedes. `workflow_run` only fires for this file on the default
   branch.
 
-The macOS legs stay required: a release is only published when every runtime
-on every OS passed. If a fork does not need macOS to release, it can mark the
-leg `continue-on-error`, at the cost of `needs.test.result` reporting success
-when that leg fails.
+The release checks run Node.js, Bun, and Deno on Ubuntu. A release requires all
+three runtime checks to pass.
 
 #### Robust Changeset Handling
 
@@ -288,13 +287,13 @@ The link checker workflow (`.github/workflows/links.yml`) validates all links in
 
 Add regex patterns to `.lycheeignore` to exclude URLs from checks (e.g., local dev URLs, example.com, known rate-limited sites).
 
-## Configuration
+## Development configuration
 
 ### Updating Package Name
 
 After creating a repository from this template, update the package name in:
 
-1. `package.json`: replace `"@link-foundation/example-package-name"` with your package name
+1. `package.json`: set the name of the package you intend to publish
 2. `.changeset/config.json`: Package references
 
 Release scripts derive the package name from `package.json` at runtime, so no

@@ -1,5 +1,5 @@
 ---
-'@link-foundation/example-package-name': patch
+'@link-assistant/hive-runners': patch
 ---
 
 Make CI survive GitHub infrastructure failures:

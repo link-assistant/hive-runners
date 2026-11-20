@@ -3,13 +3,18 @@
   "specifiers": {
     "npm:@changesets/cli@^3.0.3": "3.0.3",
     "npm:@eslint/js@^10.0.1": "10.0.1_eslint@10.13.0",
+    "npm:@link-foundation/link-cli-client@0.5.0": "0.5.0",
+    "npm:@link-foundation/ui-core@0.1.0": "0.1.0",
+    "npm:@link-foundation/ui-dom@0.1.0": "0.1.0",
     "npm:command-stream@2.4.0": "2.4.0",
     "npm:eslint-config-prettier@^10.1.8": "10.1.8_eslint@10.13.0",
     "npm:eslint-plugin-prettier@^5.5.4": "5.5.6_eslint@10.13.0_eslint-config-prettier@10.1.8_prettier@3.8.4",
     "npm:eslint@^10.13.0": "10.13.0",
     "npm:husky@^9.1.7": "9.1.7",
     "npm:jscpd@^5.4.0": "5.4.0",
+    "npm:links-notation@0.27.1": "0.27.1",
     "npm:lino-arguments@0.4.0": "0.4.0",
+    "npm:lino-objects-codec@0.9.5": "0.9.5",
     "npm:lint-staged@^16.4.0": "16.4.0",
     "npm:prettier@^3.6.2": "3.8.4",
     "npm:test-anywhere@~0.8.48": "0.8.50",
@@ -263,6 +268,45 @@
     },
     "@keyv/serialize@1.1.1": {
       "integrity": "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="
+    },
+    "@link-foundation/link-cli-client@0.5.0": {
+      "integrity": "sha512-MxFZeJv6j5mBelrXm2Xep+cxZMkRM0ui+p45RDoFblmiwJx5/GoxcvWgFdEubpRp752n9RiJrGoSLkxUWxQ24g=="
+    },
+    "@link-foundation/ui-core@0.1.0": {
+      "integrity": "sha512-qjyQD+iPFmUyW4WCSr1WZLLm76BhxFjOvCPCDMfawGeh11VGG9gzGetZmD0GLLsX47IptZ4BzXAnRD9OykI3hA==",
+      "dependencies": [
+        "links-notation@0.27.1"
+      ]
+    },
+    "@link-foundation/ui-dom@0.1.0": {
+      "integrity": "sha512-E/r32RJIICHIS+sarkHt+fvqv/3bsd1wwDKW5oiqzVdH1YinDzo0kFMDX3leWQY0i+n5rFDpf1G1DnRdiq+7nQ==",
+      "dependencies": [
+        "@link-foundation/ui-core",
+        "@link-foundation/ui-store",
+        "@link-foundation/ui-style",
+        "@link-foundation/ui-tokens"
+      ]
+    },
+    "@link-foundation/ui-store@0.1.0": {
+      "integrity": "sha512-gllkgX9iJBC4X+w8AVVDY99vgzl/KBXp4OPOASVQWrP4Ob10J6Edj85vUimPhN2meS9gEdykaucSNjVKE6S0VQ==",
+      "dependencies": [
+        "@link-foundation/ui-core"
+      ]
+    },
+    "@link-foundation/ui-style@0.1.0": {
+      "integrity": "sha512-F5x0YWDytDis8jUHDnoaL0844Hcf4bQuEaS+wnJNWc1FXZOZd5kPl0jh+2lBlB8Bu0ez2w2XnGQwSmdzHGdjkw==",
+      "dependencies": [
+        "@link-foundation/ui-core",
+        "@link-foundation/ui-tokens"
+      ]
+    },
+    "@link-foundation/ui-tokens@0.1.0": {
+      "integrity": "sha512-lGUXhjsRa1qdOHqWOxhKjcFMGC2xxj2vksdhHVClQFBZVCJ+qL7bHqEMim6/1XwB4AZ0/LpXLUMbRr3i0z0f6A==",
+      "dependencies": [
+        "@link-foundation/ui-core",
+        "@link-foundation/ui-style"
+      ],
+      "bin": true
     },
     "@manypkg/find-root@3.1.0": {
       "integrity": "sha512-BcSqCyKhBVZ5YkSzOiheMCV41kqAFptW6xGqYSTjkVTl9XQpr+pqHhwgGCOHQtjDCv7Is6EFyA14Sm5GVbVABA==",
@@ -883,6 +927,12 @@
         "links-notation@0.11.2"
       ]
     },
+    "lino-objects-codec@0.9.5": {
+      "integrity": "sha512-X9wM7r0ZrhPYnl0AWNXh8zGntP1eLTPrHJfZnmSth1Rgaypq7lHSEen+WGKYLFa3XDaKZbvDx3LTXkuNzR/hew==",
+      "dependencies": [
+        "links-notation@0.27.1"
+      ]
+    },
     "lint-staged@16.4.0": {
       "integrity": "sha512-lBWt8hujh/Cjysw5GYVmZpFHXDCgZzhrOm8vbcUdobADZNOK/bRshr2kM3DfgrrtR1DQhfupW9gnIXOfiFi+bw==",
       "dependencies": [
@@ -1194,13 +1244,18 @@
       "dependencies": [
         "npm:@changesets/cli@^3.0.3",
         "npm:@eslint/js@^10.0.1",
+        "npm:@link-foundation/link-cli-client@0.5.0",
+        "npm:@link-foundation/ui-core@0.1.0",
+        "npm:@link-foundation/ui-dom@0.1.0",
         "npm:command-stream@2.4.0",
         "npm:eslint-config-prettier@^10.1.8",
         "npm:eslint-plugin-prettier@^5.5.4",
         "npm:eslint@^10.13.0",
         "npm:husky@^9.1.7",
         "npm:jscpd@^5.4.0",
+        "npm:links-notation@0.27.1",
         "npm:lino-arguments@0.4.0",
+        "npm:lino-objects-codec@0.9.5",
         "npm:lint-staged@^16.4.0",
         "npm:prettier@^3.6.2",
         "npm:test-anywhere@~0.8.48",

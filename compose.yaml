@@ -1,0 +1,59 @@
+services:
+  hive-runners:
+    build: .
+    ports:
+      - '127.0.0.1:8080:8080'
+    env_file:
+      - .env
+    volumes:
+      - ./hive-runners.lino:/etc/hive/config.lino:ro
+      - state:/var/lib/hive
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=0700
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 2m
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    profiles: [monitoring]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    ports:
+      - '127.0.0.1:9090:9090'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+    secrets: [metrics_key]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+  grafana:
+    image: grafana/grafana:13.3.1
+    profiles: [monitoring]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    ports:
+      - '127.0.0.1:3000:3000'
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./charts/hive-runners/dashboards:/etc/hive-dashboards:ro
+      - grafana:/var/lib/grafana
+    secrets: [grafana_password]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+secrets:
+  metrics_key:
+    environment: HIVE_METRICS_KEY
+  grafana_password:
+    environment: HIVE_GRAFANA_ADMIN_PASSWORD
+volumes:
+  state:
+  prometheus:
+  grafana:

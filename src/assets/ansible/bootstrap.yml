@@ -1,0 +1,115 @@
+---
+- name: Gather host architecture
+  ansible.builtin.setup:
+    gather_subset: ['!all', hardware]
+- name: Install host packages
+  ansible.builtin.apt:
+    name: [acl, ca-certificates, conntrack, docker.io, sudo]
+    update_cache: true
+    cache_valid_time: 3600
+- name: Start Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+- name: Create the cluster administrator account
+  ansible.builtin.user:
+    name: '{{ hive_user }}'
+    groups: docker
+    append: true
+    create_home: true
+    shell: /bin/bash
+    password_lock: true
+- name: Install Minikube
+  ansible.builtin.get_url:
+    url: 'https://github.com/kubernetes/minikube/releases/download/{{ minikube_version }}/minikube-linux-{{ hive_arch }}'
+    dest: /usr/local/bin/minikube
+    checksum: 'sha256:{{ minikube_sha[hive_arch] }}'
+    mode: '0755'
+- name: Download and verify Helm
+  ansible.builtin.get_url:
+    url: 'https://get.helm.sh/helm-{{ helm_version }}-linux-{{ hive_arch }}.tar.gz'
+    dest: '/var/tmp/helm-{{ helm_version }}-linux-{{ hive_arch }}.tar.gz'
+    checksum: 'sha256:{{ helm_sha[hive_arch] }}'
+    mode: '0644'
+- name: Install Helm
+  ansible.builtin.unarchive:
+    src: '/var/tmp/helm-{{ helm_version }}-linux-{{ hive_arch }}.tar.gz'
+    dest: /usr/local/bin
+    remote_src: true
+    include: ['linux-{{ hive_arch }}/helm']
+    extra_opts: ['--strip-components=1']
+- name: Read host capacity and free Docker filesystem space
+  ansible.builtin.shell: |
+    set -euo pipefail
+    nproc
+    awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo
+    df -Pm "$(docker info --format '{{ '{{.DockerRootDir}}' }}')" | awk 'NR == 2 {print $4}'
+  args:
+    executable: /bin/bash
+  register: hive_hardware
+  changed_when: false
+- name: Require CPU, memory and free disk for the selected pool allocation
+  ansible.builtin.assert:
+    that:
+      - hive_hardware.stdout_lines | length == 3
+      - (hive_hardware.stdout_lines[0] | int) * 1000 >= hive_minimum.cpuMillis | int
+      - hive_hardware.stdout_lines[1] | int >= hive_minimum.memoryMiB | int
+      - hive_hardware.stdout_lines[2] | int >= hive_minimum.diskMiB | int
+    fail_msg: 'Runner host has insufficient CPU, RAM or free space in the Docker filesystem'
+- name: Verify NVIDIA hardware and runtime prerequisites
+  when: hive_gpu_count | int > 0
+  block:
+    - name: Count NVIDIA devices with functional drivers
+      ansible.builtin.command:
+        argv: [nvidia-smi, '--query-gpu=index', '--format=csv,noheader']
+      register: hive_gpu_devices
+      changed_when: false
+    - name: Verify NVIDIA Docker runtime
+      ansible.builtin.command:
+        argv: [docker, info, --format, '{{ "{{json .Runtimes}}" }}']
+      register: hive_runtime
+      changed_when: false
+    - name: Require the selected number of NVIDIA devices and an NVIDIA Docker runtime
+      ansible.builtin.assert:
+        that:
+          - hive_gpu_devices.stdout_lines | length >= hive_gpu_count | int
+          - "'nvidia' in (hive_runtime.stdout | from_json)"
+        fail_msg: Install a supported NVIDIA driver and configure the NVIDIA Container Toolkit for Docker
+- name: Launch the pool Minikube profile
+  become_user: '{{ hive_user }}'
+  environment:
+    HOME: '{{ hive_home }}'
+    KUBECONFIG: '{{ hive_kubeconfig }}'
+  block:
+    - name: Ensure Minikube is running
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/usr/local/bin/minikube', '-p', hive_profile, 'start',
+              '--driver=docker', '--cni=calico', '--listen-address=127.0.0.1',
+              '--cpus=' ~ hive_minikube_cpus, '--memory=' ~ hive_minikube_memory]
+             + (['--container-runtime=docker', '--gpus=all'] if (hive_gpu_count | int > 0) else []) }}
+      changed_when: false
+    - name: Verify Kubernetes can allocate the selected NVIDIA devices
+      when: hive_gpu_count | int > 0
+      ansible.builtin.command:
+        argv:
+          [
+            /usr/local/bin/minikube,
+            -p,
+            '{{ hive_profile }}',
+            kubectl,
+            '--',
+            get,
+            nodes,
+            '-o',
+            json,
+          ]
+      register: hive_nodes
+      until: >-
+        hive_nodes.rc == 0 and
+        (((hive_nodes.stdout | from_json)['items'] | first | default({})).status.allocatable['nvidia.com/gpu']
+          | default('0') | int) >= hive_gpu_count | int
+      retries: 24
+      delay: 5
+      changed_when: false

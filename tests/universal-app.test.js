@@ -89,7 +89,7 @@ describe('universal React example app', () => {
     expect(workflow).toContain('./.github/actions/artifact-transport');
     expect(workflow).toContain('scripts/deploy-pages.mjs');
     expect(workflow).toContain('EXAMPLE_APP_ENABLE_ANDROID_BUILD');
-    expect(workflow).toContain('EXAMPLE_APP_ENABLE_IOS_BUILD');
+    expect(workflow).not.toContain('runs-on: macos');
   });
 
   it('documents local validation without store credentials', () => {

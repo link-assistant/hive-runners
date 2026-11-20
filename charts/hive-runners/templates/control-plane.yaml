@@ -1,0 +1,162 @@
+{{- $name := printf "%s-hive" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- $file := "config.lino" -}}
+{{- $config := default "(\n  version 1\n)\n" .Values.configLino -}}
+{{- if .Values.configJSON -}}
+{{- $file = "config.json" -}}
+{{- $config = .Values.configJSON | mustFromJson | mustToJson -}}
+{{- else if .Values.config -}}
+{{- $file = "config.json" -}}
+{{- $config = .Values.config | mustToJson -}}
+{{- end -}}
+{{- if and .Values.configLino (or .Values.configJSON .Values.config) -}}
+{{- fail "Provide configLino, configJSON, or config" -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+data:
+  {{ $file }}: {{ $config | quote }}
+---
+{{- if not .Values.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $name }}
+      annotations:
+        checksum/config: {{ $config | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control-plane
+          image: {{ printf "%s:%s" (required "image.repository is required" .Values.image.repository) (required "image.tag is required" .Values.image.tag) | quote }}
+          args: ["serve", "--config", "/etc/hive/{{ $file }}"]
+          ports:
+            - { name: http, containerPort: 8080 }
+          {{- if .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          {{- end }}
+          {{- if or .Values.sshSecret .Values.uiConfigMap }}
+          env:
+            {{- if .Values.sshSecret }}
+            - name: HIVE_SSH_PRIVATE_KEY_FILE
+              value: /var/run/hive-ssh/identity
+            {{- end }}
+            {{- if .Values.uiConfigMap }}
+            - name: HIVE_UI_DIR
+              value: /etc/hive-ui
+            {{- end }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          volumeMounts:
+            - { name: config, mountPath: /etc/hive, readOnly: true }
+            - { name: state, mountPath: /var/lib/hive }
+            - { name: temp, mountPath: /tmp }
+            {{- if .Values.sshSecret }}
+            - { name: ssh, mountPath: /var/run/hive-ssh, readOnly: true }
+            {{- end }}
+            {{- if .Values.uiConfigMap }}
+            - { name: ui, mountPath: /etc/hive-ui, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ default $name .Values.persistence.existingClaim }}
+        - name: temp
+          emptyDir:
+            sizeLimit: 128Mi
+        {{- if .Values.sshSecret }}
+        - name: ssh
+          secret:
+            secretName: {{ .Values.sshSecret }}
+            defaultMode: 0440
+        {{- end }}
+        {{- if .Values.uiConfigMap }}
+        - name: ui
+          configMap:
+            name: {{ .Values.uiConfigMap | quote }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/instance: {{ $name }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ $name }}
+  ports:
+    - { name: http, port: 80, targetPort: http }
+{{- if .Values.ingress.host }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ required "ingress.tlsSecret is required when ingress.host is set" .Values.ingress.tlsSecret | quote }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- end }}

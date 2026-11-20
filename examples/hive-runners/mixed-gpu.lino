@@ -1,0 +1,31 @@
+(
+  version 1
+  prefix "mixed"
+  pools (
+    private-gpu (
+      scope "your-org/your-private-repo"
+      isolation "job"
+      containerMode "kubernetes-novolume"
+      capacity 1
+      cpus 4
+      memoryMiB 8192
+      diskMiB 32768
+      job (
+        cpuMillis 2000
+        memoryMiB 4096
+        diskMiB 16384
+        gpus 1
+      )
+    )
+    gitlab-build (
+      platform "gitlab"
+      scope "engineering/private-builds"
+      gitlabRunnerId 42
+      isolation "job"
+      capacity 2
+      cpus 3
+      memoryMiB 4096
+      diskMiB 24576
+    )
+  )
+)

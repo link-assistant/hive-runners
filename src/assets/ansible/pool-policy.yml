@@ -1,0 +1,98 @@
+---
+- name: Create the runner namespace
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        apply,
+        -f,
+        '-',
+      ]
+    stdin: '{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"hive-runners"}}'
+- name: Select the runner pod security profile
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/minikube
+      - -p
+      - '{{ hive_profile }}'
+      - kubectl
+      - '--'
+      - label
+      - namespace
+      - hive-runners
+      - "pod-security.kubernetes.io/enforce={{ 'privileged' if hive_container_mode == 'dind' else 'baseline' }}"
+      - --overwrite
+- name: Isolate workloads from the host and other pools
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        apply,
+        -f,
+        '-',
+      ]
+    stdin: "{{ lookup('ansible.builtin.file', 'runner-network.yml') }}"
+- name: Bound resource use of job containers and helpers
+  when: hive_container_mode != 'dind'
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        apply,
+        -f,
+        '-',
+      ]
+    stdin: |
+      apiVersion: v1
+      kind: LimitRange
+      metadata:
+        name: hive-pool-container-defaults
+        namespace: hive-runners
+      spec:
+        limits:
+          - type: Container
+            default: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+            defaultRequest: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+      ---
+      apiVersion: v1
+      kind: ResourceQuota
+      metadata:
+        name: hive-pool-capacity
+        namespace: hive-runners
+      spec:
+        hard:
+          requests.cpu: "{{ hive_minikube_cpus | int - 1 }}"
+          requests.memory: "{{ hive_minikube_memory | int - 1024 }}Mi"
+          requests.ephemeral-storage: "{{ hive_disk_mib | int - 4096 }}Mi"
+          limits.ephemeral-storage: "{{ hive_disk_mib | int - 4096 }}Mi"
+- name: Remove shared-pool limits from a trusted privileged pool
+  when: hive_container_mode == 'dind'
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        delete,
+        'limitrange/hive-pool-container-defaults',
+        'resourcequota/hive-pool-capacity',
+        --namespace=hive-runners,
+        --ignore-not-found,
+      ]
+- name: Configure the manager's limited API access
+  ansible.builtin.include_tasks: kubernetes-jobs.yml
+  when: hive_platform == 'gitlab' or hive_container_mode == 'kubernetes-novolume'

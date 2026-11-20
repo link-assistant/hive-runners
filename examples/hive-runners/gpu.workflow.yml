@@ -1,0 +1,15 @@
+name: Check the contributed NVIDIA GPU
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  nvidia:
+    runs-on: private-gpu
+    timeout-minutes: 10
+    container: nvidia/cuda:12.8.1-base-ubuntu24.04
+    steps:
+      - name: List allocated NVIDIA devices
+        run: nvidia-smi -L

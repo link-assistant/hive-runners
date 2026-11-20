@@ -1,0 +1,127 @@
+---
+- name: Resolve the Kubernetes service address
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        get,
+        service,
+        kubernetes,
+        -o,
+        'jsonpath={.spec.clusterIP}',
+      ]
+  register: hive_api_service
+  changed_when: false
+- name: Resolve the private Kubernetes API endpoints
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        get,
+        endpointslices,
+        -l,
+        kubernetes.io/service-name=kubernetes,
+        -o,
+        json,
+      ]
+  register: hive_api_slices
+  changed_when: false
+- name: Select IPv4 API endpoint slices
+  ansible.builtin.set_fact:
+    hive_api_endpoints: "{{ (hive_api_slices.stdout | from_json)['items'] | selectattr('addressType', 'equalto', 'IPv4') | list }}"
+- name: Require a private Minikube API endpoint
+  ansible.builtin.assert:
+    that:
+      - hive_api_endpoints | length > 0
+      - hive_api_service.stdout is match('^[0-9.]+$')
+- name: Grant API egress to the runner pod only
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        apply,
+        -f,
+        '-',
+      ]
+    stdin: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: hive-runner-kube-api
+        namespace: hive-runners
+      spec:
+        podSelector:
+          matchLabels:
+            hive-runners.net/workload: {{ 'manager' if hive_platform == 'gitlab' else 'runner' }}
+        policyTypes: [Egress]
+        egress:
+          - to:
+              - ipBlock:
+                  cidr: {{ hive_api_service.stdout }}/32
+            ports:
+              - protocol: TCP
+                port: 443
+      {% for slice in hive_api_endpoints %}
+          - to:
+      {% for endpoint in slice.endpoints %}
+      {% for address in endpoint.addresses %}
+              - ipBlock:
+                  cidr: {{ address }}/32
+      {% endfor %}
+      {% endfor %}
+            ports:
+      {% for port in slice.ports %}
+              - protocol: TCP
+                port: {{ port.port }}
+      {% endfor %}
+      {% endfor %}
+- name: Install the tokenless ARC job and action pod template
+  when: hive_platform == 'github'
+  ansible.builtin.command:
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        apply,
+        -f,
+        '-',
+      ]
+    stdin: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hive-job-policy
+        namespace: hive-runners
+      data:
+        pod.yaml: |
+          metadata:
+            labels:
+              hive-runners.net/workload: job
+          spec:
+            automountServiceAccountToken: false
+            enableServiceLinks: false
+            securityContext:
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: "$job"
+                resources: {{ hive_job_resources | to_json }}
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: [NET_RAW]

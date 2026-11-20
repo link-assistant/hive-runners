@@ -1,0 +1,26 @@
+(page
+  (title 'Deployment guide · Hive Runners')
+  (header (class 'shell top')
+    (a (class brand) (href /)
+      (span (aria-hidden true) (content H))
+      (copy (content ' Hive Runners')))
+    (nav (aria-label Main) (a (href /portal) (content 'Runner portal'))))
+  (main (class 'shell interior')
+    (h1 (content 'Deploy a fleet'))
+    (p (class lede)
+      (content 'Start with one private repository and an Ubuntu host. Use your runner pool label in the workflow.'))
+    (pre (code (content 'hive-runners init
+hive-runners render
+hive-runners deploy --inventory inventory.lino')))
+    (h2 (content 'Connect GitHub'))
+    (p (content 'Connect a GitHub App, supported personal access token, or an authenticated gh CLI session to the private repository or organization.'))
+    (h2 (content 'Connect GitLab'))
+    (p (content 'Create a tag-only runner scoped to your private project or group. Set its runner ID and use the authentication token to deploy the GitLab Kubernetes executor.'))
+    (h2 (content 'Size your host'))
+    (p (content 'Run hive-runners capacity to see the CPU, memory, disk and GPU requirements. Use dedicated machines for customer workloads, or choose per-job isolation for pools sharing a host.'))
+    (h2 (content 'Enable on-demand capacity'))
+    (p (content 'Configure a provider, subscribe to GitHub workflow jobs or GitLab Job Hooks, and run the control plane to add machines when jobs queue up.'))
+    (p
+      (a (href /docs/hive-runners.md) (content 'Operator guide'))
+      (copy (content ' · '))
+      (a (href /docs/generated-cli.md) (content 'CLI reference')))))

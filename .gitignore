@@ -141,3 +141,9 @@ vite.config.ts.timestamp-*
 
 # jscpd reports
 reports/
+
+# Local control plane configuration and credentials
+.env
+hive-runners.json
+hive-runners.lino
+hive-state/

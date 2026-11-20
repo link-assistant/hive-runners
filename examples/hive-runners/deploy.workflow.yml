@@ -1,0 +1,45 @@
+name: Deploy private runner fleet
+
+on:
+  push:
+    branches: [main]
+    paths: [hive-managed/**]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-runner-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: hive-operators
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install Ansible
+        run: pipx install ansible-core
+      - name: Deploy the reviewed configuration
+        env:
+          HIVE_ARC_CREDENTIALS: ${{ secrets.HIVE_ARC_CREDENTIALS }}
+          HIVE_GITHUB_TOKEN: ${{ secrets.HIVE_GITHUB_TOKEN }}
+          HIVE_GITLAB_TOKEN: ${{ secrets.HIVE_GITLAB_TOKEN }}
+          HIVE_GITLAB_RUNNER_TOKEN: ${{ secrets.HIVE_GITLAB_RUNNER_TOKEN }}
+          SSH_IDENTITY: ${{ secrets.HIVE_SSH_IDENTITY }}
+          INVENTORY: ${{ secrets.HIVE_SSH_INVENTORY }}
+          HIVE_RUNNERS_VERSION: ${{ vars.HIVE_RUNNERS_VERSION }}
+        run: |
+          set -eu
+          test -n "$HIVE_RUNNERS_VERSION"
+          umask 077
+          export HIVE_SSH_PRIVATE_KEY_FILE="$RUNNER_TEMP/hive-identity"
+          printf '%s\n' "$SSH_IDENTITY" > "$HIVE_SSH_PRIVATE_KEY_FILE"
+          printf '%s\n' "$INVENTORY" > "$RUNNER_TEMP/hive-inventory.lino"
+          npm exec --yes --package="@link-assistant/hive-runners@$HIVE_RUNNERS_VERSION" -- \
+            hive-runners deploy --config hive-managed/config.lino \
+            --inventory "$RUNNER_TEMP/hive-inventory.lino"

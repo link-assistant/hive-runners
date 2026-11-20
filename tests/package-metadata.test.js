@@ -37,18 +37,17 @@ function windowsSymlinkSkipReason() {
 const symlinkSkipReason = windowsSymlinkSkipReason();
 
 describe('publishable package metadata', () => {
-  it('uses the real link-foundation example package name', () => {
-    expect(packageJson.name).toBe('@link-foundation/example-package-name');
+  it('uses the Hive Runners package name', () => {
+    expect(packageJson.name).toBe('@link-assistant/hive-runners');
     expect(packageJson.publishConfig).toEqual({ access: 'public' });
-    expect(lockJson.name).toBe('@link-foundation/example-package-name');
-    expect(lockJson.packages[''].name).toBe(
-      '@link-foundation/example-package-name'
-    );
+    expect(lockJson.name).toBe('@link-assistant/hive-runners');
+    expect(lockJson.packages[''].name).toBe('@link-assistant/hive-runners');
   });
 
   it('defines a globally installable CLI command', () => {
     expect(packageJson.bin).toEqual({
       'example-package-name': './bin/example-package-name.js',
+      'hive-runners': './bin/hive-runners.js',
     });
     expect(existsSync('bin/example-package-name.js')).toBe(true);
   });
@@ -99,10 +98,14 @@ describe('publishable package metadata', () => {
     }
   });
 
-  it('publishes only the package runtime surface', () => {
+  it('publishes the runtime, deployment chart and operator examples', () => {
     expect(packageJson.files).toEqual([
       'bin/',
       'src/',
+      'charts/hive-runners',
+      'docs/generated-cli.md',
+      'docs/hive-runners.md',
+      'examples/hive-runners',
       'CHANGELOG.md',
       'LICENSE',
       'README.md',

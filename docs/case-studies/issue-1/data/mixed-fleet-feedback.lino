@@ -1,0 +1,26 @@
+(
+  url "https://github.com/link-assistant/hive-runners/pull/2#issuecomment-7035306001"
+  createdAt "2026-11-20T09:10:41Z"
+  body (escaped "Double check we fully deliver https://github.com/link-assistant/hive-runners/issues/1, https://github.com/link-assistant/hive-runners/pull/2#issuecomment-7032593959 and also double check we properly handle use case of giving access to GPUs running on local system or on any other VPS with GPUs, so it is easy and cheap give access for GPU for GitHub.%0D
+%0D
+We also should support all the same for GitLab out of the box, so we have a system, that supports both GitHub Actions Runners and GitLab Actions Runners in similar way, even allows mixing both runners on single machine.%0D
+%0D
+For sharing/selling resources, we should have option to isolate them on per machine or per job basis, so for better security we should recommend giving away on per machine basis, yet we should support all configurations.%0D
+%0D
+And also our system should carefully calculate disk space, ram, CPU and so on other minimum and recommended configurations.%0D
+%0D
+And user should only pay for the configuration he selected, not more, so we should be very careful with resources.%0D
+%0D
+`Ordering and retiring VPS instances on Contabo and Hetzner requires authorized disposable provider accounts.` we just implement it as production ready, and if users will report any issues we will fix that, no need to do automated testing for these now.%0D
+%0D
+`Runner registration, group routing, job execution, drain, and isolation require a GitHub App, private test repositories, and dedicated test hosts.` our system should fully support personal access tokens, gh tool auth and so on as we do in https://github.com/link-assistant/hive-mind%0D
+%0D
+`Stripe test-mode checkout and refunds, plus webhook delivery between deployments, require Stripe test credentials and reachable test peers.` same here, implement fully using docs, if something fails - users will report and we fix.%0D
+%0D
+We also need to have all best practices of queue/resource management from Hive Mind, so we make it auto-scalling with peace of mind.%0D
+%0D
+We need to ensure all changes are correct, consistent, validated, tested, documented, logged and fully meet each and all discussed requirements in deepest and widest possible sense (check issue description and all comments in issue and in pull request, make sure each and every requirement listed before actually checking if they were addressed). Nothing should be defered or delayed. The scope is the entire repository, every change in one place should also be applied in all places in the codebase and docs. Ensure all CI/CD checks pass.%0D
+%0D
+%0D
+Please plan and execute everything in this single pull request, you have unlimited time and context, as context auto-compacts and you can continue indefinitely, until each and every requirement fully addressed, and everything is totally done.")
+)
