@@ -1,6 +1,6 @@
 FROM node:24-bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ansible-core ca-certificates openssh-client \
+    && apt-get install -y --no-install-recommends ansible-core ca-certificates gh openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -o node -g node -m 0700 /var/lib/hive /etc/hive
 WORKDIR /app

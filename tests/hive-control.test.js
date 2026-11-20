@@ -1,4 +1,5 @@
 import { URLSearchParams } from 'node:url';
+import { createHmac } from 'node:crypto';
 import { describe, it, expect } from 'test-anywhere';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -9,6 +10,8 @@ import { controlPlane } from '../src/control/server.js';
 import { openStore } from '../src/control/store.js';
 import { digest } from '../src/control/usage.js';
 import { parseNotation } from '../src/notation.js';
+import { offerProfile } from '../src/resources.js';
+import { validateConfig } from '../src/config.js';
 
 const webhookSecret = 'fixture-webhook';
 const key = 'x'.repeat(48);
@@ -247,6 +250,41 @@ describe('control plane and usage', () => {
   });
 });
 
+it('locks the quoted resources, caps spending, and drains when funds are spent', async () => {
+  let time = epoch - 120000;
+  await withHttp(config, { now: () => time }, async (plane, request) => {
+    const { scope, label, capacity, rate, profile } =
+      plane.commerce.offer('customer');
+    const quote = {
+      minutes: 15,
+      scope,
+      label,
+      capacity,
+      rateCeiling: rate,
+      profile,
+      maxCents: 15,
+    };
+    const activate = (body) =>
+      request('/v1/activation', {
+        method: 'PUT',
+        headers: auth,
+        body: JSON.stringify(body),
+      });
+    expect(
+      (await activate({ ...quote, profile: { ...profile, gpus: 1 } })).status
+    ).toBe(409);
+    expect((await activate({ ...quote, maxCents: 9 })).status).toBe(402);
+    expect((await activate(quote)).status).toBe(200);
+    expect((await activate({ ...quote, maxCents: 20 })).status).toBe(409);
+    time = epoch;
+    await request('/webhooks/github', githubRequest(event('completed')));
+    await request('/webhooks/github', githubRequest(event('completed', 18)));
+    expect(plane.commerce.offer('customer').credit).toBe(85);
+    await plane.reconcile();
+    expect(plane.commerce.offer('customer').activation).toBe(null);
+  });
+});
+
 describe('Stripe payments', () => {
   it('settles Stripe credit only once and handles refunds before fulfillment', async () => {
     const env = {
@@ -284,8 +322,13 @@ describe('Stripe payments', () => {
           url: 'https://checkout.stripe.com/c/pay/fixture',
         });
         expect(plane.usage.credit('customer')).toBe(100);
-        async function post(type, object, timestamp = epoch / 1000) {
-          const body = JSON.stringify({ type, data: { object } });
+        async function post(
+          type,
+          object,
+          timestamp = epoch / 1000,
+          created = timestamp
+        ) {
+          const body = JSON.stringify({ type, created, data: { object } });
           return request('/webhooks/stripe', {
             method: 'POST',
             body,
@@ -312,6 +355,27 @@ describe('Stripe payments', () => {
           202
         );
         await post('checkout.session.completed', paid);
+        expect(plane.usage.credit('customer')).toBe(460);
+        const dispute = {
+          id: 'dp_fixture',
+          payment_intent: 'pi_fixture',
+          amount: 200,
+        };
+        await post('charge.dispute.created', {
+          ...dispute,
+          status: 'warning_needs_response',
+        });
+        expect(plane.usage.credit('customer')).toBe(460);
+        await post('charge.dispute.funds_withdrawn', dispute);
+        await post('charge.dispute.funds_withdrawn', dispute);
+        expect(plane.usage.credit('customer')).toBe(260);
+        await post('charge.dispute.funds_reinstated', dispute);
+        await post(
+          'charge.dispute.funds_withdrawn',
+          dispute,
+          epoch / 1000,
+          epoch / 1000 - 1
+        );
         expect(plane.usage.credit('customer')).toBe(460);
         await post('charge.refunded', {
           payment_intent: 'pi_fixture',
@@ -348,6 +412,74 @@ it('supports customer operations through the CLI and library', async () => {
 });
 
 describe('fleet reconciliation', () => {
+  it('reserves provider capacity for a paid activation while private demand grows', async () => {
+    const input = {
+      ...config,
+      providers: { low: { ...provider, maxMachines: 2 } },
+      pools: {
+        internal: {
+          scope: 'org',
+          selectedRepositories: ['internal'],
+          provider: 'low',
+          capacity: 1,
+          minMachines: 1,
+          maxMachines: 2,
+          webhookSecretEnv: 'INTERNAL_WEBHOOK_SECRET',
+        },
+        ...config.pools,
+      },
+    };
+    const remotes = [];
+    const internalSecret = 'fixture-internal-webhook';
+    await withHttp(
+      input,
+      {
+        env: { ...options.env, INTERNAL_WEBHOOK_SECRET: internalSecret },
+        scaling: {
+          keys: async () => ({
+            knownKey: 'ssh-ed25519 fixture',
+            userData: '#cloud-config',
+          }),
+          provider: () => ({
+            list: async () => remotes,
+            create: async (name) => {
+              const remote = {
+                id: String(remotes.length + 1),
+                name,
+                ip: '192.0.2.10',
+              };
+              remotes.push(remote);
+              return remote;
+            },
+          }),
+          host: async () => ({ runners: 0 }),
+        },
+      },
+      async (plane, request) => {
+        expect(plane.commerce.activate('customer', epoch + 900000).route).toBe(
+          'local'
+        );
+        for (const id of [18, 19]) {
+          const queued = event('queued', id);
+          queued.repository.full_name = 'org/internal';
+          queued.workflow_job.labels = ['internal'];
+          await request(
+            '/webhooks/github',
+            signedEvent(queued, internalSecret)
+          );
+        }
+        await plane.reconcile();
+        await plane.reconcile();
+        expect(plane.usage.workloads().internal.queued).toBe(2);
+        expect(plane.scale.poolMachines('internal').length).toBe(1);
+        await request('/webhooks/github', githubRequest(event('queued')));
+        await plane.reconcile();
+        expect(plane.scale.poolMachines('jobs').length).toBe(1);
+        expect(remotes.length).toBe(2);
+      }
+    );
+  });
+
   it('activates, provisions, drains across two observations and retires a machine', async () => {
     let time = epoch;
     let runners = 1;
@@ -409,6 +541,104 @@ describe('fleet reconciliation', () => {
   });
 });
 
+it('routes signed GitLab jobs, releases foreign demand, and settles only the selected runner', async () => {
+  const rawKey = Buffer.alloc(32, 8);
+  const gitlab = {
+    ...config,
+    pools: {
+      jobs: {
+        platform: 'gitlab',
+        scope: 'org/repo',
+        capacity: 1,
+        gitlabRunnerId: 123,
+        provider: 'low',
+      },
+      github: { scope: 'org/repo', capacity: 1, label: 'jobs' },
+    },
+  };
+  let time = epoch - 120000;
+  let snapshot;
+  let calls = 0;
+  const env = {
+    ...options.env,
+    HIVE_GITLAB_TOKEN: 'gitlab-api-fixture',
+    HIVE_GITLAB_WEBHOOK_SECRET: `whsec_${rawKey.toString('base64')}`,
+  };
+  const fetcher = async (url, args) => {
+    expect(url.origin).toBe('https://gitlab.com');
+    expect(args.headers['private-token']).toBe(env.HIVE_GITLAB_TOKEN);
+    calls++;
+    return globalThis.Response.json(
+      url.pathname.includes('/jobs/')
+        ? snapshot
+        : { id: 7, visibility: 'private' }
+    );
+  };
+  await withHttp(
+    gitlab,
+    { env, fetcher, now: () => time },
+    async (plane, request) => {
+      plane.commerce.activate('customer', epoch + 900000, false, 25);
+      time = epoch;
+      async function deliver(status, runnerId, id = 17, signAt = time) {
+        snapshot = {
+          id,
+          status,
+          tag_list: ['jobs'],
+          runner: runnerId ? { id: runnerId } : null,
+          started_at: new Date(epoch - 61000).toISOString(),
+          finished_at:
+            status === 'success' ? new Date(epoch).toISOString() : null,
+        };
+        const body = JSON.stringify({
+          object_kind: 'build',
+          build_id: id,
+          build_status: status,
+          project: { path_with_namespace: 'org/repo' },
+        });
+        const stamp = String(Math.floor(signAt / 1000));
+        const delivery = `fixture-${id}-${status}`;
+        const hmac = createHmac('sha256', rawKey)
+          .update(`${delivery}.${stamp}.${body}`)
+          .digest('base64');
+        return (
+          await request('/webhooks/gitlab', {
+            method: 'POST',
+            body,
+            headers: {
+              'x-gitlab-event': 'Job Hook',
+              'webhook-id': delivery,
+              'webhook-timestamp': stamp,
+              'webhook-signature': `v1,${hmac}`,
+            },
+          })
+        ).status;
+      }
+
+      expect(await deliver('pending', null, 17, time - 301000)).toBe(401);
+      expect(calls).toBe(0);
+      expect(await deliver('pending')).toBe(202);
+      await request('/webhooks/github', githubRequest(event('queued')));
+      expect(plane.usage.workloads()).toEqual({
+        jobs: { queued: 1, running: 0 },
+        github: { queued: 1, running: 0 },
+      });
+      await deliver('running', 456);
+      await deliver('success', 456);
+      expect(plane.usage.workloads().jobs).toEqual({ queued: 0, running: 0 });
+      expect(plane.commerce.offer('customer').credit).toBe(100);
+      await deliver('pending', null, 18);
+      await deliver('pending', null, 18);
+      await deliver('running', 123, 18);
+      expect(plane.usage.workloads().jobs).toEqual({ queued: 0, running: 1 });
+      await deliver('success', 123, 18);
+      await deliver('success', 123, 18);
+      expect(plane.usage.workloads().jobs).toEqual({ queued: 0, running: 0 });
+      expect(plane.commerce.offer('customer').credit).toBe(80);
+    }
+  );
+});
+
 describe('upstream federation', () => {
   it('tries compatible suppliers in price order and pins the accepted allocation', async () => {
     const hub = {
@@ -429,12 +659,18 @@ describe('upstream federation', () => {
               keyEnv: 'UPSTREAM_KEY',
               maxRate: 8,
             },
+            {
+              origin: 'https://wrong-gpu.example.com',
+              keyEnv: 'UPSTREAM_KEY',
+              maxRate: 8,
+            },
           ],
         },
       },
     };
     const operations = [];
     let draining = true;
+    const profile = offerProfile(validateConfig(hub).pools.jobs);
     await withHttp(
       hub,
       {
@@ -454,10 +690,15 @@ describe('upstream federation', () => {
           return globalThis.Response.json({
             available: true,
             currency: 'usd',
-            rate: cheaper ? 6 : 7,
+            rate:
+              url.hostname === 'wrong-gpu.example.com' ? 1 : cheaper ? 6 : 7,
             scope: 'org/repo',
             label: 'jobs',
             capacity: 1,
+            profile:
+              url.hostname === 'wrong-gpu.example.com'
+                ? { ...profile, gpus: 1 }
+                : profile,
             activation: null,
             draining: false,
           });
@@ -474,14 +715,20 @@ describe('upstream federation', () => {
         await plane.reconcile();
         const allocation = {
           expires: epoch + 900000,
-          rateCeiling: 8,
+          rateCeiling: 7,
           scope: 'org/repo',
           label: 'jobs',
+          capacity: 1,
+          profile,
         };
         expect(operations).toEqual([
           ['supplier.example.com/v1/offer', undefined],
           ['lower-price.example.com/v1/offer', undefined],
-          ['lower-price.example.com/v1/wholesale', allocation],
+          ['wrong-gpu.example.com/v1/offer', undefined],
+          [
+            'lower-price.example.com/v1/wholesale',
+            { ...allocation, rateCeiling: 6 },
+          ],
           ['lower-price.example.com/v1/offer', undefined],
           ['supplier.example.com/v1/wholesale', allocation],
           ['supplier.example.com/v1/wholesale', allocation],

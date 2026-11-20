@@ -28,6 +28,8 @@ jobs:
         env:
           HIVE_ARC_CREDENTIALS: ${{ secrets.HIVE_ARC_CREDENTIALS }}
           HIVE_GITHUB_TOKEN: ${{ secrets.HIVE_GITHUB_TOKEN }}
+          HIVE_GITLAB_TOKEN: ${{ secrets.HIVE_GITLAB_TOKEN }}
+          HIVE_GITLAB_RUNNER_TOKEN: ${{ secrets.HIVE_GITLAB_RUNNER_TOKEN }}
           SSH_IDENTITY: ${{ secrets.HIVE_SSH_IDENTITY }}
           INVENTORY: ${{ secrets.HIVE_SSH_INVENTORY }}
           HIVE_RUNNERS_VERSION: ${{ vars.HIVE_RUNNERS_VERSION }}

@@ -14,6 +14,7 @@ export function httpClient(
     fetcher = fetch,
     service = new URL(origin).hostname,
     notation = false,
+    signal,
   } = {}
 ) {
   const contentType = notation ? linoMediaType : 'application/json';
@@ -44,7 +45,7 @@ export function httpClient(
       },
       body: encodeBody(body),
       redirect: 'error',
-      signal: AbortSignal.timeout(25000),
+      signal: signal ?? AbortSignal.timeout(25000),
     });
     if (!response.ok) {
       await response.body?.cancel();

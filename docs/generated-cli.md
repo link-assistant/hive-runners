@@ -13,7 +13,7 @@ hive-runners init [--config FILE]
 
 ## render
 
-Write Terraform, Ansible and ARC files under hive-managed.
+Write Terraform, Ansible and runner chart values under hive-managed.
 
 ```text
 hive-runners render [--config FILE] [--directory DIR]
@@ -21,10 +21,18 @@ hive-runners render [--config FILE] [--directory DIR]
 
 ## deploy
 
-Deploy ARC to SSH inventory hosts or explicitly apply Terraform first.
+Deploy GitHub and GitLab pools to SSH inventory hosts, optionally after applying Terraform.
 
 ```text
 hive-runners deploy [--config FILE] (--inventory FILE | --apply-infra) [--directory DIR]
+```
+
+## capacity
+
+Calculate job requirements and minimum and recommended machine capacity.
+
+```text
+hive-runners capacity [--config FILE] [--shared POOL[,POOL]]
 ```
 
 ## proposal
@@ -67,6 +75,30 @@ Replace the custom labels on a directly registered runner.
 hive-runners github-labels --scope ORG[/REPO] --id RUNNER_ID --labels LABEL[,LABEL]
 ```
 
+## gitlab-runners
+
+List runners for a private GitLab project or group.
+
+```text
+hive-runners gitlab-runners --scope PATH [--kind project|group] [--origin HTTPS_URL]
+```
+
+## gitlab-create
+
+Create a private, tag-only GitLab runner and print its one-time credential.
+
+```text
+hive-runners gitlab-create --scope PATH --name TAG [--kind project|group] [--origin HTTPS_URL]
+```
+
+## gitlab-tag
+
+Replace a GitLab runner’s tags with the configured tag and disable untagged jobs.
+
+```text
+hive-runners gitlab-tag --id RUNNER_ID --name TAG [--origin HTTPS_URL]
+```
+
 ## provider-list
 
 List compute instances through the configured provider API.
@@ -88,7 +120,7 @@ hive-runners account-offer --origin HTTPS_URL
 Activate the runner pool for up to one hour.
 
 ```text
-hive-runners account-activate --origin HTTPS_URL --minutes MINUTES
+hive-runners account-activate --origin HTTPS_URL --minutes MINUTES [--max-cents CENTS]
 ```
 
 ## account-stop

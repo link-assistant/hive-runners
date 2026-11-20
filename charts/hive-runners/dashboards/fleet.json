@@ -2,7 +2,7 @@
   "title": "Hive Runners",
   "uid": "hive-runners",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {
     "from": "now-1h",
@@ -200,6 +200,34 @@
           "refId": "B",
           "expr": "min(hive_reconciler_healthy)",
           "legendFormat": "Reconcile"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Available host disk",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "mbytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hive_machine_available_disk_mib",
+          "legendFormat": "{{machine}}"
         }
       ]
     }

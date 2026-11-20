@@ -1,5 +1,14 @@
 export * from './index.js';
 
+export interface RunnerResources {
+  cpuMillis: number;
+  memoryMiB: number;
+  diskMiB: number;
+  gpus: number;
+}
+
+export type HostHardware = Omit<RunnerResources, 'gpus'> & { gpus?: number };
+
 export interface ProviderConfig {
   type: 'contabo' | 'hetzner';
   maxMachines?: number;
@@ -9,10 +18,18 @@ export interface ProviderConfig {
   image: string;
   sshKeys: string[];
   monthlyCents: number;
+  hardware?: HostHardware;
 }
 
 export interface PoolConfig {
+  platform?: 'github' | 'gitlab';
   scope: string;
+  gitlabUrl?: string;
+  gitlabScopeType?: 'project' | 'group';
+  gitlabRunnerId?: number;
+  gitlabChartVersion?: string;
+  gitlabEgressIPv4?: string[];
+  gitlabCAEnv?: string;
   label?: string;
   provider?: string | null;
   maxMachines?: number;
@@ -26,12 +43,48 @@ export interface PoolConfig {
   webhookSecretEnv?: string;
   cpus?: number;
   memoryMiB?: number;
+  diskMiB?: number;
+  isolation?: 'machine' | 'job';
+  job?: Partial<RunnerResources>;
   arcVersion?: string;
   containerMode?: 'process' | 'kubernetes-novolume' | 'dind';
   runnerImage?: string;
   selectedRepositories?: string[];
-  spareHost?: { ip: string; user?: string; hostKey: string };
+  spareHost?: {
+    ip: string;
+    user?: string;
+    hostKey: string;
+    hardware?: HostHardware;
+  };
 }
+
+type NormalizedPool = Required<
+  Omit<
+    PoolConfig,
+    | 'gitlabUrl'
+    | 'gitlabScopeType'
+    | 'gitlabRunnerId'
+    | 'gitlabChartVersion'
+    | 'gitlabEgressIPv4'
+    | 'gitlabCAEnv'
+    | 'spareHost'
+    | 'job'
+  >
+> &
+  Pick<
+    PoolConfig,
+    | 'gitlabUrl'
+    | 'gitlabScopeType'
+    | 'gitlabRunnerId'
+    | 'gitlabChartVersion'
+    | 'gitlabEgressIPv4'
+    | 'gitlabCAEnv'
+    | 'spareHost'
+  > & { profile: string; job: RunnerResources };
+
+type NormalizedProvider = Required<Omit<ProviderConfig, 'hardware'>> & {
+  hardware?: RunnerResources;
+};
 
 export interface AccountConfig {
   pool: string;
@@ -59,6 +112,7 @@ export interface MachineTarget {
   user?: string;
   group?: string;
   knownHosts?: string;
+  minimum?: RunnerResources;
 }
 
 type Environment = Record<string, string | undefined>;
@@ -71,10 +125,11 @@ type FetchOptions = { env?: Environment; fetcher?: typeof fetch };
 type RunnerMetrics = {
   runners: number;
   availableMemoryMiB: number;
+  availableDiskMiB: number;
   load1: number;
 };
-type ArcHost = (
-  pool: Required<PoolConfig>,
+type RunnerHost = (
+  pool: NormalizedPool,
   machine: MachineTarget,
   operation?: 'deploy' | 'deploy-drained' | 'inspect' | 'drain' | 'park'
 ) => Promise<RunnerMetrics | null>;
@@ -89,8 +144,8 @@ type Machine = {
 export declare function validateConfig(input: unknown): {
   version: 1;
   prefix: string;
-  providers: Record<string, Required<ProviderConfig>>;
-  pools: Record<string, Required<PoolConfig>>;
+  providers: Record<string, NormalizedProvider>;
+  pools: Record<string, NormalizedPool>;
   accounts: Record<string, Required<AccountConfig>>;
 };
 export declare function loadConfig(
@@ -114,8 +169,38 @@ export declare function githubClient(
     labels: string[]
   ): Promise<Record<string, unknown>>;
 };
+export declare function githubToken(
+  env?: Environment,
+  name?: string,
+  run?: Run
+): Promise<string>;
+type GitLabScope = 'project' | 'group';
+export declare function gitlabClient(
+  origin: string,
+  token: string,
+  fetcher?: typeof fetch
+): {
+  privateScope(
+    scope: string,
+    type: GitLabScope
+  ): Promise<{ id: number; visibility: 'private' }>;
+  listRunners(
+    scope: string,
+    type?: GitLabScope
+  ): Promise<Record<string, unknown>[]>;
+  runner(id: number): Promise<Record<string, unknown>>;
+  job(scope: string, id: number): Promise<Record<string, unknown>>;
+  listProjects(scope: string): Promise<Record<string, unknown>[]>;
+  verify(token: string, instance: string): Promise<{ id: number }>;
+  createRunner(
+    scope: string,
+    type: GitLabScope,
+    label: string
+  ): Promise<{ id: number; token: string }>;
+  configureRunner(id: number, label: string): Promise<Record<string, unknown>>;
+};
 export declare function providerClient(
-  config: Required<ProviderConfig>,
+  config: NormalizedProvider,
   options?: FetchOptions
 ): {
   list(): Promise<Machine[]>;
@@ -123,13 +208,31 @@ export declare function providerClient(
   retire(machine: Machine): Promise<void>;
 };
 export declare function arcValues(
-  pool: Required<PoolConfig>,
+  pool: NormalizedPool,
   group?: string,
   drained?: boolean
 ): Record<string, unknown>;
-export declare function arcHost(
+export declare function gitlabValues(
+  pool: NormalizedPool,
+  drained?: boolean
+): Record<string, unknown>;
+export declare function runnerHost(
   options?: FetchOptions & { run?: Run }
-): ArcHost;
+): RunnerHost;
+export declare const arcHost: typeof runnerHost;
+export declare function capacityPlan(config: HiveConfig): Record<
+  string,
+  {
+    job: RunnerResources;
+    runnersPerMachine: number;
+    minimum: RunnerResources;
+    recommended: RunnerResources;
+  }
+>;
+export declare function capacityPlan(
+  config: HiveConfig,
+  sharedPools: string[]
+): { minimum: RunnerResources; recommended: RunnerResources };
 export declare function terraformPlan(
   config: HiveConfig
 ): Record<string, unknown>;
@@ -141,11 +244,18 @@ export declare function deploy(
   config: HiveConfig,
   options: {
     directory?: string;
-    inventory?: Record<string, Omit<MachineTarget, 'group'> & { pool: string }>;
+    inventory?: Record<
+      string,
+      Omit<MachineTarget, 'group' | 'minimum'> & {
+        pool: string;
+        hardware?: HostHardware;
+      }
+    >;
     apply?: boolean;
     env?: Environment;
+    fetcher?: typeof fetch;
     run?: Run;
-    host?: ArcHost;
+    host?: RunnerHost;
   }
 ): Promise<number>;
 export declare function propose(
@@ -165,25 +275,41 @@ export interface RunnerActivation {
   expires: number;
   route: 'local' | 'upstream';
   wholesale: boolean;
+  rate?: number;
+  maxCents?: number;
+  profile?: RunnerProfile;
+  capacity?: number;
+}
+export interface RunnerProfile extends RunnerResources {
+  platform: 'github' | 'gitlab';
+  origin: string;
+  mode: NonNullable<PoolConfig['containerMode']>;
+  isolation: NonNullable<PoolConfig['isolation']>;
+  runnerId?: number;
+}
+export interface RunnerOffer {
+  scope: string;
+  label: string;
+  capacity: number;
+  profile: RunnerProfile;
+  rate: number;
+  currency: 'usd';
+  available: boolean;
+  activation: RunnerActivation | null;
+  draining: boolean;
+  credit: number;
+  checkoutEnabled: boolean;
 }
 export declare function runnerAccount(
   origin: string,
   key: string,
   options?: { fetcher?: typeof fetch; notation?: boolean }
 ): {
-  offer(): Promise<{
-    scope: string;
-    label: string;
-    capacity: number;
-    rate: number;
-    currency: 'usd';
-    available: boolean;
-    activation: RunnerActivation | null;
-    draining: boolean;
-    credit: number;
-    checkoutEnabled: boolean;
-  }>;
-  activate(minutes: number): Promise<RunnerActivation>;
+  offer(): Promise<RunnerOffer>;
+  activate(
+    minutes: number,
+    options?: { maxCents?: number; offer?: RunnerOffer }
+  ): Promise<RunnerActivation>;
   stop(): Promise<{ active: false; draining: boolean }>;
   checkout(amount: number, requestId: string): Promise<{ url: string }>;
 };

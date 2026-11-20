@@ -36,6 +36,7 @@ const tags = [
 ];
 const attributes = [
   'alt',
+  'aria-describedby',
   'aria-hidden',
   'aria-label',
   'aria-labelledby',

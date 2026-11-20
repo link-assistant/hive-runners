@@ -2,14 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
-import { arcHost } from '../arc.js';
-import { requireValue } from '../config.js';
+import { runnerHost } from '../arc.js';
+import { projectPool, requireValue } from '../config.js';
 import { HttpError } from '../http.js';
 import { machineName } from '../infrastructure.js';
 import { runProcess } from '../process.js';
 import { providerClient } from '../providers.js';
 import { withWorkspace } from '../workspace.js';
 import { spareFleet } from './spare.js';
+import { allocation } from '../resources.js';
 
 export function bootstrapKeys(run = runProcess) {
   return withWorkspace(async ({ directory }) => {
@@ -43,12 +44,15 @@ function totals(config, store, provider) {
 }
 
 function binding(pool, cloud) {
-  return [
+  const github = [
     pool.scope.toLowerCase(),
     pool.label,
     cloud.type,
     cloud.tokenPrefix,
   ].join('/');
+  return pool.platform === 'gitlab'
+    ? [pool.gitlabUrl, pool.gitlabRunnerId, github].join('/')
+    : github;
 }
 
 function machineLifecycle(store, config, { now, host, keys }) {
@@ -61,6 +65,7 @@ function machineLifecycle(store, config, { now, host, keys }) {
       pool: name,
       provider: pool.provider,
       binding: binding(pool, config.providers[pool.provider]),
+      allocation: allocation(pool),
       phase: 'ordering',
       knownKey,
       wanted: now(),
@@ -92,7 +97,10 @@ function machineLifecycle(store, config, { now, host, keys }) {
     requireValue(isIP(remote.ip) === 4, 'Waiting for provider IPv4');
     return {
       ip: remote.ip,
-      group: pool.scope.includes('/') ? undefined : machine.name,
+      group:
+        pool.platform === 'github' && !projectPool(pool)
+          ? machine.name
+          : undefined,
       knownHosts: `${remote.ip} ${machine.knownKey}\n`,
     };
   }
@@ -138,7 +146,7 @@ function machineLifecycle(store, config, { now, host, keys }) {
   }
 
   async function maintain(machine, pool, hostTarget, time) {
-    if (machine.phase !== 'active') {
+    if (machine.phase !== 'active' || !machine.allocation) {
       await host(pool, hostTarget);
     }
     const refresh = !machine.observed || time - machine.observed > 120000;
@@ -148,6 +156,7 @@ function machineLifecycle(store, config, { now, host, keys }) {
     store.put('machine', machine.name, {
       ...machine,
       phase: 'active',
+      allocation: allocation(pool),
       wanted: time,
       emptySince: null,
       metrics,
@@ -180,6 +189,27 @@ function machineLifecycle(store, config, { now, host, keys }) {
   return { create, applyMachine };
 }
 
+function unclaimedMinimum(config, store, time, name, machines) {
+  const leases = new Set(
+    store
+      .entries('lease')
+      .filter(([, lease]) => lease.route === 'local' && lease.expires > time)
+      .map(([id]) => config.accounts[id]?.pool)
+  );
+  return Object.entries(config.pools).reduce((total, [peer, pool]) => {
+    if (peer === name || pool.provider !== config.pools[name].provider) {
+      return total;
+    }
+    const usable = machines.filter(
+      ([, machine]) => machine.pool === peer && machine.phase !== 'retiring'
+    ).length;
+    return (
+      total +
+      Math.max(0, Math.max(pool.minMachines, leases.has(peer) ? 1 : 0) - usable)
+    );
+  }, 0);
+}
+
 export function fleet(
   store,
   config,
@@ -187,7 +217,7 @@ export function fleet(
     env,
     fetcher,
     now = Date.now,
-    host = arcHost({ env, fetcher }),
+    host = runnerHost({ env, fetcher }),
     provider = (cloud) => providerClient(cloud, { env, fetcher }),
     keys = bootstrapKeys,
     report = () => {},
@@ -216,22 +246,14 @@ export function fleet(
       return Boolean(pool.spareHost);
     }
     const { reserved, machines } = totals(config, store, pool.provider);
-    const leases = store.entries('lease').filter(([id, lease]) => {
-      const reservedPool = config.accounts[id]?.pool;
-      return (
-        reservedPool !== name &&
-        config.pools[reservedPool]?.provider === pool.provider &&
-        lease.route === 'local' &&
-        lease.expires > now() &&
-        !machines.some(([, machine]) => machine.pool === reservedPool)
-      );
-    });
     const loaded = machines.filter(([, machine]) => machine.pool === name);
     if (loaded.some(([, machine]) => machine.phase !== 'retiring')) {
       return true;
     }
     return (
-      reserved + machines.length + leases.length <
+      reserved +
+        machines.length +
+        unclaimedMinimum(config, store, now(), name, machines) <
       config.providers[pool.provider].maxMachines
     );
   }
@@ -244,7 +266,8 @@ export function fleet(
       requireValue(
         pool?.provider === machine.provider &&
           cloud &&
-          machine.binding === binding(pool, cloud),
+          machine.binding === binding(pool, cloud) &&
+          (!machine.allocation || machine.allocation === allocation(pool)),
         `Existing machine ${machine.name} must be drained before removing or moving its pool or provider credentials`
       );
     }
@@ -286,7 +309,10 @@ export function fleet(
     const { reserved, machines: all } = totals(config, store, pool.provider);
     if (
       wanted > canRun.length &&
-      reserved + all.length < config.providers[pool.provider].maxMachines
+      reserved +
+        all.length +
+        unclaimedMinimum(config, store, now(), name, all) <
+        config.providers[pool.provider].maxMachines
     ) {
       await create(name, pool, client);
     }

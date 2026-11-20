@@ -1,0 +1,24 @@
+(
+  github-gpu (
+    pool "private-gpu"
+    ip "192.0.2.10"
+    user "root"
+    hardware (
+      cpuMillis 8000
+      memoryMiB 16384
+      diskMiB 204800
+      gpus 1
+    )
+  )
+  gitlab-build (
+    pool "gitlab-build"
+    ip "192.0.2.10"
+    user "root"
+    hardware (
+      cpuMillis 8000
+      memoryMiB 16384
+      diskMiB 204800
+      gpus 1
+    )
+  )
+)

@@ -56,11 +56,11 @@ export async function propose(
         'The generated configuration already matches the base branch'
       );
       const description = [
-        'Update the managed Terraform, Ansible and ARC configuration.',
+        'Update the managed Terraform, Ansible and runner chart configuration.',
         '',
         ...Object.entries(config.pools).map(
           ([name, pool]) =>
-            `- \`${name}\` targets \`${pool.scope}\` with label \`${pool.label}\`, ${pool.minMachines} minimum machine(s) and ${pool.capacity} runners per machine.`
+            `- \`${name}\` targets ${pool.platform} \`${pool.scope}\` with label \`${pool.label}\` and ${pool.isolation} isolation. It uses ${pool.minMachines} minimum machine(s) and ${pool.capacity} runners per machine, each with ${pool.job.cpuMillis} millicores, ${pool.job.memoryMiB} MiB RAM, ${pool.job.diskMiB} MiB disk and ${pool.job.gpus} GPUs.`
         ),
         '',
         'Changed files',

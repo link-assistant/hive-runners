@@ -4,6 +4,8 @@
     argv:
       [
         /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
         kubectl,
         '--',
         get,
@@ -19,6 +21,8 @@
     argv:
       [
         /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
         kubectl,
         '--',
         get,
@@ -40,7 +44,17 @@
       - hive_api_service.stdout is match('^[0-9.]+$')
 - name: Grant API egress to the runner pod only
   ansible.builtin.command:
-    argv: [/usr/local/bin/minikube, kubectl, '--', apply, -f, '-']
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        apply,
+        -f,
+        '-',
+      ]
     stdin: |
       apiVersion: networking.k8s.io/v1
       kind: NetworkPolicy
@@ -50,7 +64,7 @@
       spec:
         podSelector:
           matchLabels:
-            hive-runners.net/workload: runner
+            hive-runners.net/workload: {{ 'manager' if hive_platform == 'gitlab' else 'runner' }}
         policyTypes: [Egress]
         egress:
           - to:
@@ -74,8 +88,19 @@
       {% endfor %}
       {% endfor %}
 - name: Install the tokenless ARC job and action pod template
+  when: hive_platform == 'github'
   ansible.builtin.command:
-    argv: [/usr/local/bin/minikube, kubectl, '--', apply, -f, '-']
+    argv:
+      [
+        /usr/local/bin/minikube,
+        -p,
+        '{{ hive_profile }}',
+        kubectl,
+        '--',
+        apply,
+        -f,
+        '-',
+      ]
     stdin: |
       apiVersion: v1
       kind: ConfigMap
@@ -95,6 +120,7 @@
                 type: RuntimeDefault
             containers:
               - name: "$job"
+                resources: {{ hive_job_resources | to_json }}
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:

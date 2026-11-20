@@ -1,0 +1,167 @@
+---
+- name: Maintain an isolated GitLab Runner on a Linux machine
+  hosts: all
+  become: true
+  gather_facts: false
+  vars_files: [versions.yml]
+  tasks:
+    - name: Prepare the machine and launch Minikube
+      tags: [deploy]
+      ansible.builtin.import_tasks: bootstrap.yml
+    - name: Manage GitLab Runner with private cluster credentials
+      become_user: '{{ hive_user }}'
+      environment:
+        HOME: '{{ hive_home }}'
+        KUBECONFIG: '{{ hive_kubeconfig }}'
+      block:
+        - name: Install GitLab Runner and pool admission policy
+          tags: [deploy]
+          block:
+            - name: Configure pool admission, network and job resources
+              ansible.builtin.import_tasks: pool-policy.yml
+            - name: Install the GitLab runner authentication secret
+              no_log: true
+              ansible.builtin.command:
+                argv:
+                  [
+                    /usr/local/bin/minikube,
+                    -p,
+                    '{{ hive_profile }}',
+                    kubectl,
+                    '--',
+                    apply,
+                    --server-side,
+                    -f,
+                    '-',
+                  ]
+                stdin: >-
+                  {{ {'apiVersion': 'v1', 'kind': 'Secret',
+                    'metadata': {'name': 'hive-gitlab-auth', 'namespace': 'hive-runners'},
+                    'type': 'Opaque',
+                    'data': {'runner-token': ((lookup('ansible.builtin.env', 'HIVE_RUNNER_AUTH_JSON') | from_json)['runner-token'] | b64encode),
+                      'runner-registration-token': ''}} | to_json }}
+            - name: Set the custom CA used by the runner and GitLab helper
+              when: hive_gitlab_values.certsSecretName is defined
+              no_log: true
+              ansible.builtin.command:
+                argv:
+                  [
+                    /usr/local/bin/minikube,
+                    -p,
+                    '{{ hive_profile }}',
+                    kubectl,
+                    '--',
+                    apply,
+                    --server-side,
+                    -f,
+                    '-',
+                  ]
+                stdin: >-
+                  {{ {'apiVersion': 'v1', 'kind': 'Secret',
+                    'metadata': {'name': 'hive-gitlab-ca', 'namespace': 'hive-runners'},
+                    'type': 'Opaque',
+                    'data': {cert.key: (cert.value | b64encode)}} | to_json }}
+              vars:
+                cert: "{{ (lookup('ansible.builtin.env', 'HIVE_RUNNER_AUTH_JSON') | from_json | dict2items | rejectattr('key', 'equalto', 'runner-token') | list)[0] }}"
+            - name: Allow HTTPS to selected private GitLab endpoints
+              when: hive_gitlab_egress | length > 0
+              ansible.builtin.command:
+                argv:
+                  [
+                    /usr/local/bin/minikube,
+                    -p,
+                    '{{ hive_profile }}',
+                    kubectl,
+                    '--',
+                    apply,
+                    -f,
+                    '-',
+                  ]
+                stdin: |
+                  apiVersion: networking.k8s.io/v1
+                  kind: NetworkPolicy
+                  metadata:
+                    name: hive-gitlab-egress
+                    namespace: hive-runners
+                  spec:
+                    podSelector: {}
+                    policyTypes: [Egress]
+                    egress:
+                      - to:
+                  {% for address in hive_gitlab_egress %}
+                          - ipBlock: {cidr: "{{ address }}/32"}
+                  {% endfor %}
+                        ports: [{protocol: TCP, port: {{ hive_gitlab_port }}}]
+            - name: Remove any prior GitLab private endpoints
+              when: hive_gitlab_egress | length == 0
+              ansible.builtin.command:
+                argv:
+                  [
+                    /usr/local/bin/minikube,
+                    -p,
+                    '{{ hive_profile }}',
+                    kubectl,
+                    '--',
+                    delete,
+                    networkpolicy/hive-gitlab-egress,
+                    --namespace=hive-runners,
+                    --ignore-not-found,
+                  ]
+            - name: Install the official GitLab Runner Helm chart
+              ansible.builtin.command:
+                argv:
+                  - /usr/local/bin/helm
+                  - upgrade
+                  - --install
+                  - hive-gitlab
+                  - gitlab-runner
+                  - --repo
+                  - https://charts.gitlab.io
+                  - --version
+                  - '{{ hive_gitlab_version }}'
+                  - --namespace=hive-runners
+                  - --values=-
+                  - --wait
+                stdin: '{{ hive_gitlab_values | to_json }}'
+        - name: Gracefully stop runner polling on this host
+          tags: [drain]
+          ansible.builtin.command:
+            argv:
+              [
+                /usr/local/bin/minikube,
+                -p,
+                '{{ hive_profile }}',
+                kubectl,
+                '--',
+                scale,
+                'deployment/hive-gitlab',
+                --replicas=0,
+                --namespace=hive-runners,
+              ]
+        - name: Inspect unfinished jobs and terminating GitLab managers
+          tags: [inspect, drain]
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/minikube
+              - -p
+              - '{{ hive_profile }}'
+              - kubectl
+              - '--'
+              - get
+              - pods
+              - --namespace=hive-runners
+              - '--selector=hive-runners.net/workload in (job,manager)'
+              - --field-selector=status.phase!=Succeeded,status.phase!=Failed
+              - -o
+              - json
+          register: hive_gitlab_pods
+          changed_when: false
+        - name: Emit observed GitLab runner and host metrics
+          tags: [inspect, drain]
+          ansible.builtin.import_tasks: inspect.yml
+          vars:
+            hive_observed_pods: '{{ (hive_gitlab_pods.stdout | from_json)["items"] | length }}'
+        - name: Remove the idle GitLab pool profile from a spare host
+          tags: [park]
+          ansible.builtin.command:
+            argv: [/usr/local/bin/minikube, -p, '{{ hive_profile }}', delete]

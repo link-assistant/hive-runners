@@ -13,9 +13,13 @@
 hive-runners render
 hive-runners deploy --inventory inventory.lino')))
     (h2 (content 'Connect GitHub'))
-    (p (content 'Install the GitHub App for the repository or organization. Supply its ARC credentials and a GitHub administration token to the deployment process.'))
+    (p (content 'Connect a GitHub App, supported personal access token, or an authenticated gh CLI session to the private repository or organization.'))
+    (h2 (content 'Connect GitLab'))
+    (p (content 'Create a tag-only runner scoped to your private project or group. Set its runner ID and use the authentication token to deploy the GitLab Kubernetes executor.'))
+    (h2 (content 'Size your host'))
+    (p (content 'Run hive-runners capacity to see the CPU, memory, disk and GPU requirements. Use dedicated machines for customer workloads, or choose per-job isolation for pools sharing a host.'))
     (h2 (content 'Enable on-demand capacity'))
-    (p (content 'Configure a provider, subscribe to GitHub workflow-job events, and run the control plane to add machines when jobs queue up.'))
+    (p (content 'Configure a provider, subscribe to GitHub workflow jobs or GitLab Job Hooks, and run the control plane to add machines when jobs queue up.'))
     (p
       (a (href /docs/hive-runners.md) (content 'Operator guide'))
       (copy (content ' · '))

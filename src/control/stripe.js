@@ -23,7 +23,33 @@ const checkoutEvents = new Set([
   'checkout.session.completed',
   'checkout.session.async_payment_succeeded',
 ]);
-const reversalEvents = new Set(['charge.refunded', 'charge.dispute.created']);
+const disputeEvents = new Set([
+  'charge.dispute.created',
+  'charge.dispute.funds_withdrawn',
+  'charge.dispute.funds_reinstated',
+]);
+
+function updateDispute(disputes, event, amount) {
+  const dispute = event.data.object;
+  const id = match(dispute.id, /^dp_[A-Za-z0-9]+$/, 'Stripe dispute ID');
+  const time = integer(
+    event.created,
+    1,
+    Number.MAX_SAFE_INTEGER,
+    'Stripe event timestamp'
+  );
+  const old = disputes[id];
+  const restored = event.type === 'charge.dispute.funds_reinstated';
+  if (
+    (old && (old.time > time || (old.time === time && old.restored))) ||
+    (event.type === 'charge.dispute.created' &&
+      dispute.status?.startsWith('warning_'))
+  ) {
+    return false;
+  }
+  disputes[id] = { time, restored, amount: restored ? 0 : amount };
+  return true;
+}
 
 export function stripePayments(store, ledger, { token, origin, fetcher }) {
   const stripe = httpClient('https://api.stripe.com', {
@@ -95,6 +121,7 @@ export function stripePayments(store, ledger, { token, origin, fetcher }) {
     ledger.adjust(order.account, order.amount - reversed);
     store.put('order', orderId, { ...order, paid: true });
     store.put('payment', session.payment_intent, {
+      ...existing,
       account: order.account,
       amount: order.amount,
       reversed,
@@ -102,26 +129,50 @@ export function stripePayments(store, ledger, { token, origin, fetcher }) {
   }
 
   function reverse(event) {
-    if (typeof event.payment_intent !== 'string') {
+    const charge = event.data.object;
+    if (typeof charge.payment_intent !== 'string') {
       return;
     }
-    const payment = store.get('payment', event.payment_intent) ?? {
+    const payment = store.get('payment', charge.payment_intent) ?? {
       reversed: 0,
     };
+    const refunded = payment.refunded ?? 0;
+    const legacyReversed =
+      payment.legacyReversed ??
+      (payment.refunded === undefined ? payment.reversed : 0);
+    const disputes = payment.disputes ?? {};
+    const isRefund = event.type === 'charge.refunded';
     const reported = integer(
-      event.amount_refunded ?? event.amount,
+      isRefund ? charge.amount_refunded : charge.amount,
       0,
       Number.MAX_SAFE_INTEGER,
       'reversal cents'
     );
+    if (!isRefund && !updateDispute(disputes, event, reported)) {
+      return;
+    }
+    const nextRefunded = isRefund ? Math.max(refunded, reported) : refunded;
     const reversed = Math.min(
       payment.amount ?? Number.MAX_SAFE_INTEGER,
-      Math.max(payment.reversed, reported)
+      Math.max(
+        legacyReversed,
+        nextRefunded +
+          Object.values(disputes).reduce(
+            (sum, dispute) => sum + dispute.amount,
+            0
+          )
+      )
     );
     if (payment.account) {
       ledger.adjust(payment.account, payment.reversed - reversed);
     }
-    store.put('payment', event.payment_intent, { ...payment, reversed });
+    store.put('payment', charge.payment_intent, {
+      ...payment,
+      reversed,
+      legacyReversed,
+      refunded: nextRefunded,
+      disputes,
+    });
   }
 
   function ingest(event) {
@@ -129,8 +180,8 @@ export function stripePayments(store, ledger, { token, origin, fetcher }) {
       if (checkoutEvents.has(event.type)) {
         settle(event.data.object);
       }
-      if (reversalEvents.has(event.type)) {
-        reverse(event.data.object);
+      if (event.type === 'charge.refunded' || disputeEvents.has(event.type)) {
+        reverse(event);
       }
     });
   }

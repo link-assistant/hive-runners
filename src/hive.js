@@ -1,11 +1,13 @@
 export * from './index.js';
 export { runnerAccount } from './account.js';
 export { validateConfig, loadConfig } from './config.js';
-export { githubClient } from './github.js';
+export { githubClient, githubToken } from './github.js';
+export { gitlabClient, gitlabValues } from './gitlab.js';
 export { providerClient } from './providers.js';
-export { arcValues, arcHost } from './arc.js';
+export { arcValues, arcHost, runnerHost } from './arc.js';
 export {
   terraformPlan,
+  capacityPlan,
   renderInfrastructure,
   deploy,
 } from './infrastructure.js';

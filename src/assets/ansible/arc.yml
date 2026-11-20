@@ -3,79 +3,16 @@
   hosts: all
   become: true
   gather_facts: false
-  vars:
-    hive_user: hive-runner
-    hive_home: /home/hive-runner
-    hive_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts.architecture] }}"
-    minikube_version: v1.39.0
-    minikube_sha:
-      amd64: b738496da01be06bbaf80c688f57ce25acd3849fbb518155f3a88e03ef555aa4
-      arm64: 202f331cb677761c5aec81c58472d16d65707358b9f66226210be3fe3275b1c3
-    helm_version: v3.21.1
-    helm_sha:
-      amd64: a349c62d6ab2d5d11f044fc0d3afa6deed7d27cc7d5c351f536b169d9fc2cc1a
-      arm64: 9b3deeecb56c4795aa806858fa4d6388c049e3edfcd771723bd12c1cbef66893
+  vars_files: [versions.yml]
   tasks:
     - name: Prepare the machine and launch Minikube
       tags: [deploy]
-      block:
-        - name: Gather host architecture
-          ansible.builtin.setup:
-            gather_subset: ['!all', hardware]
-        - name: Install host packages
-          ansible.builtin.apt:
-            name: [acl, ca-certificates, conntrack, docker.io, sudo]
-            update_cache: true
-            cache_valid_time: 3600
-        - name: Start Docker
-          ansible.builtin.service:
-            name: docker
-            state: started
-            enabled: true
-        - name: Create the cluster administrator account
-          ansible.builtin.user:
-            name: '{{ hive_user }}'
-            groups: docker
-            append: true
-            create_home: true
-            shell: /bin/bash
-            password_lock: true
-        - name: Install Minikube
-          ansible.builtin.get_url:
-            url: 'https://github.com/kubernetes/minikube/releases/download/{{ minikube_version }}/minikube-linux-{{ hive_arch }}'
-            dest: /usr/local/bin/minikube
-            checksum: 'sha256:{{ minikube_sha[hive_arch] }}'
-            mode: '0755'
-        - name: Download and verify Helm
-          ansible.builtin.get_url:
-            url: 'https://get.helm.sh/helm-{{ helm_version }}-linux-{{ hive_arch }}.tar.gz'
-            dest: '/var/tmp/helm-{{ helm_version }}-linux-{{ hive_arch }}.tar.gz'
-            checksum: 'sha256:{{ helm_sha[hive_arch] }}'
-            mode: '0644'
-        - name: Install Helm
-          ansible.builtin.unarchive:
-            src: '/var/tmp/helm-{{ helm_version }}-linux-{{ hive_arch }}.tar.gz'
-            dest: /usr/local/bin
-            remote_src: true
-            include: ['linux-{{ hive_arch }}/helm']
-            extra_opts: ['--strip-components=1']
-        - name: Ensure Minikube is running
-          become_user: '{{ hive_user }}'
-          ansible.builtin.command:
-            argv:
-              - /usr/local/bin/minikube
-              - start
-              - --driver=docker
-              - --cni=calico
-              - --listen-address=127.0.0.1
-              - '--cpus={{ hive_minikube_cpus }}'
-              - '--memory={{ hive_minikube_memory }}'
-          changed_when: false
+      ansible.builtin.import_tasks: bootstrap.yml
     - name: Manage ARC with the private cluster credentials
       become_user: '{{ hive_user }}'
       environment:
         HOME: '{{ hive_home }}'
-        KUBECONFIG: '{{ hive_home }}/.kube/config'
+        KUBECONFIG: '{{ hive_kubeconfig }}'
       block:
         - name: Install the ARC controller and runner set
           tags: [deploy]
@@ -96,32 +33,14 @@
                   - --set
                   - serviceAccount.name=hive-arc-gha-rs-controller
                   - --wait
-            - name: Create the runner namespace
-              ansible.builtin.command:
-                argv: [/usr/local/bin/minikube, kubectl, '--', apply, -f, '-']
-                stdin: '{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"hive-runners"}}'
-            - name: Apply the pod security profile for this runner mode
-              ansible.builtin.command:
-                argv:
-                  - /usr/local/bin/minikube
-                  - kubectl
-                  - '--'
-                  - label
-                  - namespace
-                  - hive-runners
-                  - "pod-security.kubernetes.io/enforce={{ 'privileged' if hive_container_mode == 'dind' else 'baseline' }}"
-                  - --overwrite
-            - name: Isolate runner workloads on the network
-              ansible.builtin.command:
-                argv: [/usr/local/bin/minikube, kubectl, '--', apply, -f, '-']
-                stdin: "{{ lookup('ansible.builtin.file', 'runner-network.yml') }}"
-            - name: Configure Kubernetes job isolation
-              ansible.builtin.include_tasks: kubernetes-jobs.yml
-              when: hive_container_mode == 'kubernetes-novolume'
+            - name: Configure pool admission, network and job resources
+              ansible.builtin.import_tasks: pool-policy.yml
             - name: Remove Kubernetes API egress permission for runners without hooks
               ansible.builtin.command:
                 argv:
                   - /usr/local/bin/minikube
+                  - -p
+                  - '{{ hive_profile }}'
                   - kubectl
                   - '--'
                   - delete
@@ -136,6 +55,8 @@
                 argv:
                   [
                     /usr/local/bin/minikube,
+                    -p,
+                    '{{ hive_profile }}',
                     kubectl,
                     '--',
                     apply,
@@ -147,7 +68,7 @@
                   {{ {'apiVersion': 'v1', 'kind': 'Secret',
                     'metadata': {'name': 'hive-arc-auth', 'namespace': 'hive-runners'},
                     'type': 'Opaque',
-                    'stringData': lookup('ansible.builtin.env', 'HIVE_ARC_AUTH_JSON') | from_json} | to_json }}
+                    'stringData': lookup('ansible.builtin.env', 'HIVE_RUNNER_AUTH_JSON') | from_json} | to_json }}
             - name: Install the official ARC runner scale set
               ansible.builtin.command:
                 argv:
@@ -169,6 +90,8 @@
           ansible.builtin.command:
             argv:
               - /usr/local/bin/minikube
+              - -p
+              - '{{ hive_profile }}'
               - kubectl
               - '--'
               - patch
@@ -183,6 +106,8 @@
             argv:
               [
                 /usr/local/bin/minikube,
+                -p,
+                '{{ hive_profile }}',
                 kubectl,
                 '--',
                 get,
@@ -199,6 +124,8 @@
           ansible.builtin.command:
             argv:
               - /usr/local/bin/minikube
+              - -p
+              - '{{ hive_profile }}'
               - kubectl
               - '--'
               - get
@@ -210,22 +137,16 @@
               - json
           register: hive_job_pods
           changed_when: false
-        - name: Read host memory and load
+        - name: Emit observed ARC runner and host metrics
           tags: [inspect, drain]
-          ansible.builtin.shell: |
-            awk '/^MemAvailable:/ {printf "%d;", $2 / 1024}' /proc/meminfo
-            cut -d ' ' -f 1 /proc/loadavg
-          register: hive_host_usage
-          changed_when: false
-        - name: Emit the observed count
-          tags: [inspect, drain]
-          ansible.builtin.debug:
-            msg: 'HIVE_RUNNER_COUNT={{ [hive_runner_count | int, hive_job_pod_count | int] | max }};{{ hive_host_usage.stdout }}'
+          ansible.builtin.import_tasks: inspect.yml
           vars:
+            hive_observed_pods: '{{ [hive_runner_count | int, hive_job_pod_count | int] | max }}'
             hive_runner_count: '{{ (hive_runners.stdout | from_json)["items"] | length }}'
             hive_job_pod_count: '{{ (hive_job_pods.stdout | default("{}") | from_json)["items"] | default([]) | length }}'
         - name: Remove the idle ARC runner scale set from a spare host
           tags: [park]
+          when: hive_profile == 'minikube'
           ansible.builtin.command:
             argv:
               - /usr/local/bin/helm
@@ -237,9 +158,12 @@
               - --wait
         - name: Remove the idle pool credential secret
           tags: [park]
+          when: hive_profile == 'minikube'
           ansible.builtin.command:
             argv:
               - /usr/local/bin/minikube
+              - -p
+              - '{{ hive_profile }}'
               - kubectl
               - '--'
               - delete
@@ -247,3 +171,8 @@
               - hive-arc-auth
               - --namespace=hive-runners
               - --ignore-not-found
+        - name: Remove the idle shared ARC Minikube profile
+          tags: [park]
+          when: hive_profile != 'minikube'
+          ansible.builtin.command:
+            argv: [/usr/local/bin/minikube, -p, '{{ hive_profile }}', delete]

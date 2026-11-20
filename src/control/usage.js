@@ -1,5 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { githubScope, integer, requireValue } from '../config.js';
+import {
+  githubScope,
+  integer,
+  poolRepositories,
+  requireValue,
+} from '../config.js';
 
 export function secureEqual(value, expected) {
   const provided = Buffer.from(typeof value === 'string' ? value : '');
@@ -19,13 +24,9 @@ const stages = { queued: 0, in_progress: 1, completed: 2 };
 const day = 24 * 60 * 60 * 1000;
 
 function belongsTo(pool, repo) {
-  const [owner, name] = repo.toLowerCase().split('/');
-  return pool.scope.includes('/')
-    ? pool.scope.toLowerCase() === repo.toLowerCase()
-    : pool.scope.toLowerCase() === owner &&
-        pool.selectedRepositories.some(
-          (candidate) => candidate.toLowerCase() === name
-        );
+  return poolRepositories(pool).some(
+    (path) => path.toLowerCase() === repo.toLowerCase()
+  );
 }
 
 function jobTimes(job, now) {
@@ -71,21 +72,149 @@ function usageWindows(store, now) {
         }
         if (lease.window) {
           store.put(history, lease.window, {
+            ...store.get(history, lease.window),
             starts: lease.starts,
             expires: lease.expires,
+            ...(lease.rate === undefined ? {} : { rate: lease.rate }),
+            ...(lease.maxCents === undefined
+              ? {}
+              : { maxCents: lease.maxCents }),
           });
         }
         return store.put('lease', id, lease);
       });
     },
-    contains(id, started) {
+    find(id, started) {
       return store
         .entries(scope(id))
-        .some(
+        .find(
           ([, { starts, expires }]) => starts <= started && started < expires
         );
     },
+    charge(id, [key, record], cents) {
+      store.put(scope(id), key, {
+        ...record,
+        charged: (record.charged ?? 0) + cents,
+      });
+    },
   };
+}
+
+function rebuildWorkloads(store, time) {
+  // Older ledgers contain jobs without a separate active-work projection.
+  // Build it once; reconciliation only reads queued and running records.
+  if (!store.get('schema', 'workloads')) {
+    const pending = store
+      .entries('job')
+      .filter(([, job]) => job.stage < 2 && time - job.seen <= 7 * day);
+    for (let index = 0; index < pending.length; index += 128) {
+      store.transaction(() => {
+        for (const [key, job] of pending.slice(index, index + 128)) {
+          store.put('workload', key, {
+            pool: job.pool,
+            stage: job.stage,
+            seen: job.seen,
+          });
+        }
+      });
+    }
+    store.put('schema', 'workloads', { version: 1 });
+  }
+}
+
+function settleJob(
+  { windows, config, credit, adjust },
+  { account, previous, stage, minutes, started, ownRunner }
+) {
+  const window =
+    stage === 2 &&
+    account &&
+    minutes &&
+    ownRunner &&
+    windows.find(account, started);
+  const fallbackRate = previous?.rate ?? config.accounts[account]?.rate ?? 0;
+  if (!window) {
+    return { rate: fallbackRate, charge: 0 };
+  }
+  const rate = window[1].rate ?? fallbackRate;
+  const allowance =
+    (window[1].maxCents ?? Number.MAX_SAFE_INTEGER) - (window[1].charged ?? 0);
+  const charge = Math.max(
+    0,
+    Math.min(minutes * rate, allowance, credit(account))
+  );
+  if (charge) {
+    adjust(account, -charge);
+    windows.charge(account, window, charge);
+  }
+  return { rate, charge };
+}
+
+function jobRecorder(
+  store,
+  config,
+  { now, windows, accounts, credit, adjust }
+) {
+  return (pool, repo, job, stage, ownRunner, trackedOnly = false) => {
+    const settings = config.pools[pool];
+    const origin =
+      settings.platform === 'gitlab' ? `${settings.gitlabUrl}:` : '';
+    const key = `${origin}${repo.toLowerCase()}:${integer(job.id, 1, Number.MAX_SAFE_INTEGER, 'workflow job ID')}`;
+    const time = now();
+    const { started, minutes } = jobTimes(job, time);
+    const account = accounts.get(pool);
+    return store.transaction(() => {
+      const previous = store.get('job', key);
+      if (
+        (trackedOnly && previous?.pool !== pool) ||
+        !acceptUpdate(previous, stage, minutes)
+      ) {
+        return false;
+      }
+      const { rate, charge } = settleJob(
+        { windows, config, credit, adjust },
+        { account, previous, stage, minutes, started, ownRunner }
+      );
+      store.put('job', key, {
+        pool,
+        stage,
+        rate,
+        seen: time,
+        started: Number.isFinite(started) ? started : null,
+        minutes,
+        charge,
+      });
+      if (stage < 2) {
+        store.put('workload', key, { pool, stage, seen: time });
+      } else {
+        store.delete('workload', key);
+      }
+      return true;
+    });
+  };
+}
+
+function activeWorkloads(store, pools, time) {
+  const status = Object.fromEntries(
+    Object.keys(pools).map((pool) => [pool, { queued: 0, running: 0 }])
+  );
+  const expired = [];
+  for (const [key, job] of store.entries('workload')) {
+    const ttl = job.stage === 0 ? day + 3600000 : 7 * day;
+    if (time - job.seen > ttl) {
+      expired.push(key);
+    } else if (Object.hasOwn(status, job.pool)) {
+      status[job.pool][job.stage === 0 ? 'queued' : 'running']++;
+    }
+  }
+  for (let index = 0; index < expired.length; index += 128) {
+    store.transaction(() => {
+      for (const key of expired.slice(index, index + 128)) {
+        store.delete('workload', key);
+      }
+    });
+  }
+  return status;
 }
 
 export function ledger(store, config, now = Date.now) {
@@ -96,7 +225,11 @@ export function ledger(store, config, now = Date.now) {
   for (const [id, account] of Object.entries(config.accounts)) {
     store.transaction(() => {
       const pool = config.pools[account.pool];
-      const identity = `${pool.scope.toLowerCase()}/${pool.label}`;
+      const target = `${pool.scope.toLowerCase()}/${pool.label}`;
+      const identity =
+        pool.platform === 'gitlab'
+          ? `${pool.gitlabUrl}/${pool.gitlabRunnerId}/${target}`
+          : target;
       const balance = store.get('balance', id);
       requireValue(
         !balance || balance.identity === identity,
@@ -123,41 +256,14 @@ export function ledger(store, config, now = Date.now) {
     store.put('balance', id, { ...account, credit: account.credit + delta });
   }
 
-  function record(pool, repo, job, stage) {
-    const key = `${repo.toLowerCase()}:${integer(job.id, 1, Number.MAX_SAFE_INTEGER, 'workflow job ID')}`;
-    const time = now();
-    const { started, minutes } = jobTimes(job, time);
-    const account = accounts.get(pool);
-    const label = config.pools[pool].label;
-    return store.transaction(() => {
-      const previous = store.get('job', key);
-      if (!acceptUpdate(previous, stage, minutes)) {
-        return false;
-      }
-      const rate = previous?.rate ?? config.accounts[account]?.rate ?? 0;
-      const metered =
-        stage === 2 &&
-        account &&
-        minutes &&
-        windows.contains(account, started) &&
-        typeof job.runner_name === 'string' &&
-        job.runner_name.startsWith(`${label}-`);
-      const charge = metered ? minutes * rate : 0;
-      if (charge) {
-        adjust(account, -charge);
-      }
-      store.put('job', key, {
-        pool,
-        stage,
-        rate,
-        seen: time,
-        started: Number.isFinite(started) ? started : null,
-        minutes,
-        charge,
-      });
-      return true;
-    });
-  }
+  rebuildWorkloads(store, now());
+  const record = jobRecorder(store, config, {
+    now,
+    windows,
+    accounts,
+    credit,
+    adjust,
+  });
 
   function ingest(payload, authorizedPools) {
     const { action, repository, workflow_job: job } = payload;
@@ -172,33 +278,85 @@ export function ledger(store, config, now = Date.now) {
       return false;
     }
     const matches = Object.entries(config.pools).filter(
-      ([, pool]) => job.labels.includes(pool.label) && belongsTo(pool, repo)
+      ([, pool]) =>
+        pool.platform === 'github' &&
+        job.labels.includes(pool.label) &&
+        belongsTo(pool, repo)
     );
     return (
       matches.length === 1 &&
       authorizedPools.has(matches[0][0]) &&
-      record(matches[0][0], repo, job, stages[action])
+      record(
+        matches[0][0],
+        repo,
+        job,
+        stages[action],
+        typeof job.runner_name === 'string' &&
+          job.runner_name.startsWith(`${matches[0][1].label}-`)
+      )
     );
   }
 
-  function workloads() {
-    const status = Object.fromEntries(
-      Object.keys(config.pools).map((pool) => [pool, { queued: 0, running: 0 }])
-    );
-    const time = now();
-    for (const [, job] of store.entries('job')) {
-      if (!Object.hasOwn(status, job.pool) || time - job.seen > 7 * day) {
-        continue;
-      }
-      if (job.stage === 0 && time - job.seen <= day + 3600000) {
-        status[job.pool].queued++;
-      }
-      if (job.stage === 1) {
-        status[job.pool].running++;
-      }
+  function ingestGitlab(repo, job, authorizedPools) {
+    const stage = {
+      pending: 0,
+      preparing: 1,
+      running: 1,
+      canceling: 1,
+      success: 2,
+      failed: 2,
+      canceled: 2,
+      skipped: 2,
+    }[job.status];
+    if (!Number.isInteger(stage)) {
+      return false;
     }
-    return status;
+    const eligible = [...authorizedPools].filter((name) => {
+      const pool = config.pools[name];
+      return (
+        belongsTo(pool, repo) &&
+        Array.isArray(job.tag_list) &&
+        job.tag_list.length === 1 &&
+        job.tag_list[0] === pool.label
+      );
+    });
+    if (eligible.length !== 1) {
+      return false;
+    }
+    const [name] = eligible;
+    const ours = job.runner?.id === config.pools[name].gitlabRunnerId;
+    const elsewhere = stage > 0 && !ours;
+    if (elsewhere && stage < 2 && !job.runner?.id) {
+      return false;
+    }
+    return record(
+      name,
+      repo,
+      {
+        id: job.id,
+        started_at: job.started_at,
+        completed_at: job.finished_at,
+      },
+      elsewhere ? 2 : stage,
+      ours,
+      elsewhere
+    );
   }
 
-  return { credit, adjust, ingest, workloads, saveLease: windows.saveLease };
+  function remaining(id, lease) {
+    const window = lease?.window && store.get(`activation:${id}`, lease.window);
+    return (
+      (lease?.maxCents ?? Number.MAX_SAFE_INTEGER) - (window?.charged ?? 0)
+    );
+  }
+
+  return {
+    credit,
+    adjust,
+    ingest,
+    ingestGitlab,
+    workloads: () => activeWorkloads(store, config.pools, now()),
+    remaining,
+    saveLease: windows.saveLease,
+  };
 }

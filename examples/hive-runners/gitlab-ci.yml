@@ -1,0 +1,16 @@
+stages: [verify]
+
+private-build:
+  stage: verify
+  tags: [gitlab-build]
+  image: alpine:3.23
+  script:
+    - uname -m
+
+# Enable this job when a GitLab pool owns the GPU allocation.
+.gpu-check:
+  stage: verify
+  tags: [private-gpu]
+  image: nvidia/cuda:12.8.1-base-ubuntu24.04
+  script:
+    - nvidia-smi -L

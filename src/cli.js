@@ -5,14 +5,20 @@ import { parseArgs } from 'node:util';
 import { runnerAccount } from './account.js';
 import {
   githubScope,
+  gitlabScope,
   loadConfig,
   match,
   requireValue,
   secret,
   slug,
 } from './config.js';
-import { githubClient } from './github.js';
-import { deploy, renderInfrastructure } from './infrastructure.js';
+import { githubClient, githubToken } from './github.js';
+import { gitlabClient } from './gitlab.js';
+import {
+  capacityPlan,
+  deploy,
+  renderInfrastructure,
+} from './infrastructure.js';
 import { formatNotation, parseNotation, readData } from './notation.js';
 import { propose } from './proposal.js';
 import { providerClient } from './providers.js';
@@ -21,11 +27,15 @@ const commands = {
   init: ['[--config FILE]', 'Write an example runner configuration.'],
   render: [
     '[--config FILE] [--directory DIR]',
-    'Write Terraform, Ansible and ARC files under hive-managed.',
+    'Write Terraform, Ansible and runner chart values under hive-managed.',
   ],
   deploy: [
     '[--config FILE] (--inventory FILE | --apply-infra) [--directory DIR]',
-    'Deploy ARC to SSH inventory hosts or explicitly apply Terraform first.',
+    'Deploy GitHub and GitLab pools to SSH inventory hosts, optionally after applying Terraform.',
+  ],
+  capacity: [
+    '[--config FILE] [--shared POOL[,POOL]]',
+    'Calculate job requirements and minimum and recommended machine capacity.',
   ],
   proposal: [
     '[--config FILE] [--base BRANCH] [--branch hive/NAME]',
@@ -41,6 +51,18 @@ const commands = {
     '--scope ORG[/REPO] --id RUNNER_ID --labels LABEL[,LABEL]',
     'Replace the custom labels on a directly registered runner.',
   ],
+  'gitlab-runners': [
+    '--scope PATH [--kind project|group] [--origin HTTPS_URL]',
+    'List runners for a private GitLab project or group.',
+  ],
+  'gitlab-create': [
+    '--scope PATH --name TAG [--kind project|group] [--origin HTTPS_URL]',
+    'Create a private, tag-only GitLab runner and print its one-time credential.',
+  ],
+  'gitlab-tag': [
+    '--id RUNNER_ID --name TAG [--origin HTTPS_URL]',
+    'Replace a GitLab runner’s tags with the configured tag and disable untagged jobs.',
+  ],
   'provider-list': [
     '--name PROVIDER [--config FILE]',
     'List compute instances through the configured provider API.',
@@ -50,7 +72,7 @@ const commands = {
     'Show the runner pool and its credit.',
   ],
   'account-activate': [
-    '--origin HTTPS_URL --minutes MINUTES',
+    '--origin HTTPS_URL --minutes MINUTES [--max-cents CENTS]',
     'Activate the runner pool for up to one hour.',
   ],
   'account-stop': ['--origin HTTPS_URL', 'End the runner pool activation.'],
@@ -115,9 +137,9 @@ function help() {
   ].join('\n');
 }
 
-function githubCommand(command, options, env, fetcher) {
+async function githubCommand(command, options, { env, fetcher, run }) {
   const scope = match(options.scope, githubScope, 'GitHub scope');
-  const client = githubClient(secret('HIVE_GITHUB_TOKEN', env), fetcher);
+  const client = githubClient(await githubToken(env, undefined, run), fetcher);
   if (command === 'github-runners') {
     return client.listRunners(scope);
   }
@@ -152,6 +174,28 @@ function githubCommand(command, options, env, fetcher) {
   );
 }
 
+async function gitlabCommand(command, options, { env, fetcher }) {
+  const client = gitlabClient(
+    options.origin ?? 'https://gitlab.com',
+    secret('HIVE_GITLAB_TOKEN', env),
+    fetcher
+  );
+  if (command === 'gitlab-tag') {
+    return client.configureRunner(Number(options.id), options.name);
+  }
+  const scope = match(options.scope, gitlabScope, 'GitLab scope');
+  const kind = match(
+    options.kind ?? 'project',
+    /^(project|group)$/,
+    'GitLab scope type'
+  );
+  if (command === 'gitlab-create') {
+    return client.createRunner(scope, kind, options.name);
+  }
+  await client.privateScope(scope, kind);
+  return client.listRunners(scope, kind);
+}
+
 function accountCommand(command, options, { env, fetcher }) {
   const account = runnerAccount(
     options.origin,
@@ -164,7 +208,15 @@ function accountCommand(command, options, { env, fetcher }) {
     return account.offer();
   }
   if (command === 'account-activate') {
-    return account.activate(Number(options.minutes));
+    return account.offer().then((offer) =>
+      account.activate(Number(options.minutes), {
+        offer,
+        maxCents:
+          options['max-cents'] === undefined
+            ? undefined
+            : Number(options['max-cents']),
+      })
+    );
   }
   if (command === 'account-stop') {
     return account.stop();
@@ -176,12 +228,16 @@ async function runConfigured(command, options, input, { env, fetcher, run }) {
   if (command === 'render') {
     return renderInfrastructure(input, options.directory ?? '.');
   }
+  if (command === 'capacity') {
+    return capacityPlan(input, options.shared?.split(','));
+  }
   if (command === 'deploy') {
     return deploy(input, {
       directory: options.directory,
       inventory: options.inventory && (await readData(options.inventory)),
       apply: options['apply-infra'] ?? false,
       env,
+      fetcher,
       run,
     });
   }
@@ -225,12 +281,10 @@ async function dispatch(command, options, dependencies) {
     return target;
   }
   if (command.startsWith('github-')) {
-    return githubCommand(
-      command,
-      options,
-      dependencies.env,
-      dependencies.fetcher
-    );
+    return githubCommand(command, options, dependencies);
+  }
+  if (command.startsWith('gitlab-')) {
+    return gitlabCommand(command, options, dependencies);
   }
   if (command.startsWith('account-')) {
     return accountCommand(command, options, dependencies);

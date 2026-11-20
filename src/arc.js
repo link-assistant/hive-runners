@@ -1,13 +1,18 @@
 import { readFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { fileURLToPath, URL } from 'node:url';
-import { arcCredentials, match, requireValue, secret } from './config.js';
-import { githubClient } from './github.js';
+import { match, projectPool, requireValue } from './config.js';
+import { githubRunnerAuth } from './github.js';
+import { gitlabRunnerAuth, gitlabValues } from './gitlab.js';
 import { runProcess } from './process.js';
+import { k8sResources, machineResources, sizing } from './resources.js';
 import { withWorkspace } from './workspace.js';
 
 export const playbook = fileURLToPath(
   new URL('./assets/ansible/arc.yml', import.meta.url)
+);
+export const gitlabPlaybook = fileURLToPath(
+  new URL('./assets/ansible/gitlab.yml', import.meta.url)
 );
 
 const runnerUser = { runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001 };
@@ -57,14 +62,11 @@ export function arcValues(pool, group, drained = false) {
               capabilities: { drop: ['ALL'] },
               ...(docker ? { ...runnerUser, ...seccomp } : {}),
             },
-            resources: {
-              requests: kubernetes
-                ? { cpu: '100m', memory: '128Mi' }
-                : {
-                    cpu: `${Math.floor(((pool.cpus - 1) * 1000) / pool.capacity)}m`,
-                    memory: `${Math.floor((pool.memoryMiB - 1024) / pool.capacity)}Mi`,
-                  },
-            },
+            resources: k8sResources(
+              kubernetes
+                ? { cpuMillis: 100, memoryMiB: 192, diskMiB: 256, gpus: 0 }
+                : pool.job
+            ),
             ...(kubernetes
               ? {
                   env: [
@@ -99,19 +101,28 @@ function processEnvironment(env) {
   );
 }
 
-export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
+export function runnerHost({
+  run = runProcess,
+  env = process.env,
+  fetcher,
+} = {}) {
   async function prepareGithub(pool, group) {
-    const client = githubClient(secret(pool.groupTokenEnv, env), fetcher);
+    const { client, credentials } = await githubRunnerAuth(pool, {
+      env,
+      run,
+      fetcher,
+    });
     if (group) {
       await client.ensureGroup(pool.scope, group, pool.selectedRepositories);
     } else {
       await client.requirePrivateRepo(pool.scope);
     }
+    return credentials;
   }
 
   return async (
     pool,
-    { ip, group, user = 'root', knownHosts },
+    { ip, group, user = 'root', knownHosts, minimum = sizing([pool]).minimum },
     operation = 'deploy'
   ) => {
     requireValue(
@@ -123,19 +134,25 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
       ['deploy', 'deploy-drained', 'drain', 'inspect', 'park'].includes(
         operation
       ),
-      'Invalid ARC operation'
+      'Invalid runner operation'
     );
+    const gitlab = pool.platform === 'gitlab';
     requireValue(
-      pool.scope.includes('/') || group,
+      gitlab || projectPool(pool) || group,
       'Organization deployments require a distinct runner group'
     );
     const deploying = operation.startsWith('deploy');
-    const credentials = deploying
-      ? arcCredentials(pool.credentialsEnv, env)
-      : {};
-    if (deploying) {
-      await prepareGithub(pool, group);
-    }
+    const credentials = !deploying
+      ? {}
+      : gitlab
+        ? await gitlabRunnerAuth(pool, { env, fetcher }, { ip })
+        : await prepareGithub(pool, group);
+    const drained = operation === 'deploy-drained';
+    const profile = pool.profile ?? 'minikube';
+    const kubeconfig =
+      profile === 'minikube'
+        ? '/home/hive-runner/.kube/config'
+        : `/home/hive-runner/kube-${profile}`;
     const inventory = {
       all: {
         hosts: {
@@ -156,12 +173,28 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
       const variables = await save(
         'variables.json',
         JSON.stringify({
-          hive_arc_version: pool.arcVersion,
-          hive_arc_values: arcValues(
-            pool,
-            group,
-            operation === 'deploy-drained'
-          ),
+          ...(gitlab
+            ? {
+                hive_gitlab_version: pool.gitlabChartVersion,
+                hive_gitlab_values: gitlabValues(pool, drained),
+              }
+            : {
+                hive_arc_version: pool.arcVersion,
+                hive_arc_values: arcValues(pool, group, drained),
+              }),
+          hive_platform: gitlab ? 'gitlab' : 'github',
+          ...(gitlab
+            ? {
+                hive_gitlab_egress: pool.gitlabEgressIPv4,
+                hive_gitlab_port: Number(new URL(pool.gitlabUrl).port || 443),
+              }
+            : {}),
+          hive_profile: profile,
+          hive_kubeconfig: kubeconfig,
+          hive_gpu_count: machineResources(pool).gpus,
+          hive_minimum: minimum,
+          hive_disk_mib: pool.diskMiB,
+          hive_job_resources: k8sResources(pool.job),
           hive_minikube_cpus: pool.cpus,
           hive_minikube_memory: pool.memoryMiB,
           hive_container_mode: pool.containerMode ?? 'process',
@@ -172,7 +205,7 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
         [
           '-i',
           inventoryPath,
-          playbook,
+          gitlab ? gitlabPlaybook : playbook,
           '--tags',
           deploying ? 'deploy' : operation,
           '--extra-vars',
@@ -181,7 +214,7 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
         {
           env: {
             ...processEnvironment(env),
-            HIVE_ARC_AUTH_JSON: JSON.stringify(credentials),
+            HIVE_RUNNER_AUTH_JSON: JSON.stringify(credentials),
             ANSIBLE_HOST_KEY_CHECKING: 'True',
             ANSIBLE_NOCOLOR: '1',
             ANSIBLE_SSH_ARGS: `-o BatchMode=yes -o StrictHostKeyChecking=yes${identity ? ` -i '${identity}' -o IdentitiesOnly=yes` : ''}${knownHostsPath ? ` -o 'UserKnownHostsFile=${knownHostsPath}'` : ''}`,
@@ -190,16 +223,19 @@ export function arcHost({ run = runProcess, env = process.env, fetcher } = {}) {
       );
       if (operation === 'inspect' || operation === 'drain') {
         const status = output.match(
-          /"HIVE_RUNNER_COUNT=([0-9]+);([0-9]+);([0-9.]+)"/
+          /"HIVE_RUNNER_COUNT=([0-9]+);([0-9]+);([0-9.]+);([0-9]+)"/
         );
         requireValue(status, 'Runner count missing from Ansible output');
         return {
           runners: Number(status[1]),
           availableMemoryMiB: Number(status[2]),
           load1: Number(status[3]),
+          availableDiskMiB: Number(status[4]),
         };
       }
       return null;
     });
   };
 }
+
+export const arcHost = runnerHost;

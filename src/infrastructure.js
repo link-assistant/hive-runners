@@ -2,10 +2,20 @@ import { URL } from 'node:url';
 import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { join, resolve } from 'node:path';
-import { arcHost, arcValues, playbook } from './arc.js';
-import { integer, match, requireValue, validateConfig } from './config.js';
+import { runnerHost, arcValues } from './arc.js';
+import { gitlabValues } from './gitlab.js';
+import {
+  hardware,
+  integer,
+  match,
+  projectPool,
+  requireValue,
+  validateConfig,
+  validateSharedHost,
+} from './config.js';
 import { formatNotation } from './notation.js';
 import { runProcess } from './process.js';
+import { sizing } from './resources.js';
 
 const credentials = {
   contabo: {
@@ -19,6 +29,28 @@ const credentials = {
 
 export function machineName(prefix, pool, slot) {
   return `${prefix}-${pool}-${slot}`;
+}
+
+export function capacityPlan(input, names) {
+  const { pools } = validateConfig(input);
+  if (names) {
+    requireValue(
+      names.length > 0 &&
+        new Set(names).size === names.length &&
+        names.every((name) => Object.hasOwn(pools, name)),
+      'Select distinct configured pools for a shared host'
+    );
+    const selected = names.map((name) => pools[name]);
+    const plan = sizing(selected);
+    validateSharedHost(selected, plan.minimum);
+    return plan;
+  }
+  return Object.fromEntries(
+    Object.entries(pools).map(([name, pool]) => [
+      name,
+      { job: pool.job, runnersPerMachine: pool.capacity, ...sizing([pool]) },
+    ])
+  );
 }
 
 function terraformServer(config, name, key) {
@@ -137,27 +169,47 @@ export async function renderInfrastructure(input, directory) {
   const managed = join(target, 'hive-managed');
   await ensureDirectory(managed);
   const hosts = Object.fromEntries(
-    Object.keys(config.pools).map((key) => [key, { hosts: {} }])
+    Object.keys(config.pools).map((pool, index) => [
+      `example-${pool}`,
+      { pool, ip: `runner-${index + 1}.example.com`, user: 'root' },
+    ])
   );
   const files = {
     'fleet.tf.json': format(terraformPlan(config)),
     'config.lino': formatNotation(config),
-    'inventory.example.lino': formatNotation({ all: { children: hosts } }),
-    'arc.yml': await readFile(playbook, 'utf8'),
-    'runner-network.yml': await readFile(
-      new URL('./assets/ansible/runner-network.yml', import.meta.url),
-      'utf8'
-    ),
-    'kubernetes-jobs.yml': await readFile(
-      new URL('./assets/ansible/kubernetes-jobs.yml', import.meta.url),
-      'utf8'
+    'inventory.example.lino': formatNotation(hosts),
+    ...Object.fromEntries(
+      await Promise.all(
+        [
+          'arc.yml',
+          'gitlab.yml',
+          'versions.yml',
+          'bootstrap.yml',
+          'inspect.yml',
+          'runner-network.yml',
+          'kubernetes-jobs.yml',
+          'pool-policy.yml',
+        ].map(async (name) => [
+          name,
+          await readFile(
+            new URL(`./assets/ansible/${name}`, import.meta.url),
+            'utf8'
+          ),
+        ])
+      )
     ),
     'arc-values.json': format(
       Object.fromEntries(
-        Object.entries(config.pools).map(([key, pool]) => [
-          key,
-          arcValues(pool, undefined),
-        ])
+        Object.entries(config.pools)
+          .filter(([, pool]) => pool.platform === 'github')
+          .map(([key, pool]) => [key, arcValues(pool, undefined)])
+      )
+    ),
+    'gitlab-values.json': format(
+      Object.fromEntries(
+        Object.entries(config.pools)
+          .filter(([, pool]) => pool.platform === 'gitlab')
+          .map(([key, pool]) => [key, gitlabValues(pool)])
       )
     ),
     '.gitignore':
@@ -176,6 +228,7 @@ export async function deploy(
     inventory,
     apply = false,
     env = process.env,
+    fetcher,
     run = runProcess,
     host,
   } = {}
@@ -211,7 +264,7 @@ export async function deploy(
       })
     );
   }
-  const applyHost = host ?? arcHost({ env, run });
+  const applyHost = host ?? runnerHost({ env, run, fetcher });
   const paid = new Set(Object.values(config.accounts).map(({ pool }) => pool));
   const entries = Object.entries(machines);
   requireValue(entries.length > 0, 'Inventory is empty');
@@ -244,10 +297,44 @@ export async function deploy(
       ip,
       user,
       knownHosts,
-      group: pool.scope.includes('/') ? undefined : machine,
+      hardware: metadata.hardware
+        ? hardware(metadata.hardware, 'inventory host hardware')
+        : undefined,
+      group:
+        pool.platform === 'github' && !projectPool(pool) ? machine : undefined,
     };
   });
+  const combined = new Map();
+  for (const [ip, entries] of Map.groupBy(targets, ({ ip }) =>
+    ip.toLowerCase()
+  )) {
+    const supply = entries[0].hardware;
+    const spare = Object.values(config.pools).filter(
+      ({ spareHost }) => spareHost?.ip === ip
+    );
+    requireValue(
+      entries.every(
+        (entry) =>
+          JSON.stringify(entry.hardware) === JSON.stringify(supply) &&
+          entry.user === entries[0].user &&
+          entry.knownHosts === entries[0].knownHosts
+      ),
+      'Shared inventory entries require identical hardware and SSH trust'
+    );
+    requireValue(
+      spare.every(
+        ({ spareHost }) =>
+          JSON.stringify(spareHost.hardware) === JSON.stringify(supply)
+      ),
+      'Inventory and spare host allocations must use identical hardware'
+    );
+    combined.set(
+      ip,
+      validateSharedHost([...entries.map(({ pool }) => pool), ...spare], supply)
+    );
+  }
   for (const { pool, ...machine } of targets) {
+    machine.minimum = combined.get(machine.ip.toLowerCase());
     await applyHost(pool, machine);
   }
   return targets.length;

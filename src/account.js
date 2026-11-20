@@ -10,10 +10,31 @@ export function runnerAccount(origin, key, { fetcher, notation = true } = {}) {
   });
   return {
     offer: () => request('/v1/offer'),
-    activate: (minutes) =>
+    activate: (minutes, { maxCents, offer } = {}) =>
       request('/v1/activation', {
         method: 'PUT',
-        body: { minutes: integer(minutes, 1, 60, 'activation minutes') },
+        body: {
+          minutes: integer(minutes, 1, 60, 'activation minutes'),
+          ...(maxCents === undefined
+            ? {}
+            : {
+                maxCents: integer(
+                  maxCents,
+                  1,
+                  Number.MAX_SAFE_INTEGER,
+                  'activation spending limit'
+                ),
+              }),
+          ...(offer?.profile
+            ? {
+                scope: offer.scope,
+                label: offer.label,
+                capacity: offer.capacity,
+                rateCeiling: offer.rate,
+                profile: offer.profile,
+              }
+            : {}),
+        },
       }),
     stop: () => request('/v1/activation', { method: 'DELETE' }),
     checkout: (amount, requestId) =>

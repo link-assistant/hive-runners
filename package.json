@@ -1,7 +1,7 @@
 {
   "name": "@link-assistant/hive-runners",
   "version": "0.11.31",
-  "description": "Autoscale private GitHub Actions runners on Minikube and budget VPS fleets",
+  "description": "Autoscale private GitHub Actions and GitLab CI runners on Linux CPU and GPU fleets",
   "type": "module",
   "main": "src/hive.js",
   "types": "src/hive.d.ts",
@@ -54,6 +54,8 @@
   },
   "keywords": [
     "github-actions",
+    "gitlab-ci",
+    "gpu",
     "self-hosted-runners",
     "autoscaling",
     "minikube",

@@ -5,13 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   arcValues,
+  capacityPlan,
   cliReference,
   deploy,
   githubClient,
+  githubToken,
+  gitlabClient,
+  gitlabValues,
   loadConfig,
   propose,
   providerClient,
   renderInfrastructure,
+  runnerHost,
   terraformPlan,
   validateConfig,
 } from '@link-assistant/hive-runners';
@@ -138,6 +143,227 @@ describe('Hive Runners infrastructure', () => {
         await git(['ls-remote', 'origin', `refs/heads/${branch}`])
       ).toContain(`refs/heads/${branch}`);
     });
+  });
+});
+
+const mixedConfig = {
+  version: 1,
+  pools: {
+    cuda: {
+      scope: 'org/repo',
+      isolation: 'job',
+      containerMode: 'kubernetes-novolume',
+      capacity: 1,
+      cpus: 3,
+      memoryMiB: 4096,
+      job: { cpuMillis: 1000, memoryMiB: 1536, diskMiB: 8192, gpus: 1 },
+    },
+    lint: {
+      platform: 'gitlab',
+      scope: 'team/private',
+      gitlabRunnerId: 42,
+      isolation: 'job',
+      capacity: 1,
+      cpus: 3,
+      memoryMiB: 4096,
+    },
+  },
+};
+
+it('adds the host reserve once and requires isolation, enough hardware and one GPU scheduler', async () => {
+  const hardware = {
+    cpuMillis: 8000,
+    memoryMiB: 12288,
+    diskMiB: 65536,
+    gpus: 1,
+  };
+  const inventory = {
+    github: { pool: 'cuda', ip: '192.0.2.10', hardware },
+    gitlab: { pool: 'lint', ip: '192.0.2.10', hardware },
+  };
+  const operations = [];
+  const host = async (pool, target) =>
+    operations.push([pool.profile, target.minimum]);
+  expect(await deploy(mixedConfig, { inventory, host })).toBe(2);
+  const combined = {
+    cpuMillis: 7000,
+    memoryMiB: 9216,
+    diskMiB: 53248,
+    gpus: 1,
+  };
+  expect(operations).toEqual([
+    ['hive-cuda', combined],
+    ['hive-lint', combined],
+  ]);
+  expect(capacityPlan(mixedConfig, ['cuda', 'lint']).minimum).toEqual(combined);
+  expect(capacityPlan(mixedConfig).cuda.minimum.gpus).toBe(1);
+  expect(capacityPlan(mixedConfig).cuda.recommended.diskMiB).toBe(204800);
+  for (const target of Object.values(inventory)) {
+    target.hardware = { ...hardware, cpuMillis: 6000 };
+  }
+  await rejects(
+    deploy(mixedConfig, { inventory, host }),
+    /combined pool minimum/
+  );
+  expect(operations.length).toBe(2);
+  for (const target of Object.values(inventory)) {
+    target.hardware = { ...hardware, gpus: 2 };
+  }
+  await rejects(
+    deploy(
+      {
+        ...mixedConfig,
+        pools: {
+          ...mixedConfig.pools,
+          lint: { ...mixedConfig.pools.lint, job: { gpus: 1 } },
+        },
+      },
+      { inventory, host }
+    ),
+    /GPUs to one profile/
+  );
+  await rejects(
+    deploy(
+      {
+        ...mixedConfig,
+        pools: {
+          ...mixedConfig.pools,
+          lint: { ...mixedConfig.pools.lint, isolation: 'machine' },
+        },
+      },
+      { inventory, host }
+    ),
+    /job isolation/
+  );
+});
+
+it('authenticates an SSH GitLab GPU deployment and keeps the credential out of generated values', async () => {
+  const pool = validateConfig({
+    ...mixedConfig,
+    pools: {
+      lint: {
+        ...mixedConfig.pools.lint,
+        gitlabUrl: 'https://git.example.com:8443',
+        gitlabEgressIPv4: ['10.0.0.2'],
+        job: { gpus: 1 },
+      },
+    },
+  }).pools.lint;
+  const env = {
+    HIVE_GITLAB_RUNNER_TOKEN: 'glrt-example',
+    HIVE_GITLAB_TOKEN: 'gitlab-api-fixture',
+  };
+  const calls = [];
+  let wrongRunner = false;
+  const host = runnerHost({
+    env,
+    fetcher: async (url, request) => {
+      calls.push(url.pathname);
+      expect(url.origin).toBe('https://git.example.com:8443');
+      if (
+        url.pathname.endsWith('/verify') ||
+        url.pathname.endsWith('/managers')
+      ) {
+        expect(JSON.parse(request.body).token).toBe(
+          env.HIVE_GITLAB_RUNNER_TOKEN
+        );
+        expect(JSON.parse(request.body).system_id).toMatch(/^r_[a-f0-9]{12}$/);
+        if (request.method === 'DELETE') {
+          return new globalThis.Response(null, { status: 204 });
+        }
+        return globalThis.Response.json({ id: wrongRunner ? 43 : 42 });
+      }
+      expect(request.headers['private-token']).toBe(env.HIVE_GITLAB_TOKEN);
+      return globalThis.Response.json(
+        url.pathname === '/api/v4/runners/42'
+          ? {
+              runner_type: 'project_type',
+              tag_list: ['lint'],
+              paused: false,
+              run_untagged: false,
+              locked: true,
+              projects: [{ id: 7 }],
+            }
+          : { id: 7, visibility: 'private' }
+      );
+    },
+    async run(program, args, options) {
+      expect(program).toBe('ansible-playbook');
+      expect(args[2].endsWith('/gitlab.yml')).toBe(true);
+      const variables = JSON.parse(
+        await readFile(args.at(-1).slice(1), 'utf8')
+      );
+      expect(variables.hive_profile).toBe('hive-lint');
+      expect(variables.hive_gitlab_egress).toEqual(['10.0.0.2']);
+      expect(variables.hive_gitlab_port).toBe(8443);
+      if (args[4] === 'deploy') {
+        expect(options.env.HIVE_RUNNER_AUTH_JSON).toContain('glrt-example');
+        expect(variables.hive_gitlab_values.replicas).toBe(0);
+        expect(variables.hive_gitlab_values.runners.config).toContain(
+          '"nvidia.com/gpu":"1"'
+        );
+        expect(variables.hive_gitlab_values.runners.config).toContain(
+          '/automountServiceAccountToken'
+        );
+        expect(JSON.stringify(variables).includes('glrt-example')).toBe(false);
+      }
+      return '"HIVE_RUNNER_COUNT=0;512;0.1;8192"';
+    },
+  });
+  const target = { ip: '192.0.2.10' };
+  await host(pool, target, 'deploy-drained');
+  expect(calls).toEqual([
+    '/api/v4/projects/team%2Fprivate',
+    '/api/v4/runners/42',
+    '/api/v4/runners/verify',
+    '/api/v4/runners/managers',
+  ]);
+  expect(await host(pool, target, 'drain')).toEqual({
+    runners: 0,
+    availableMemoryMiB: 512,
+    availableDiskMiB: 8192,
+    load1: 0.1,
+  });
+  expect(gitlabValues(pool).replicas).toBe(1);
+  wrongRunner = true;
+  await rejects(host(pool, target), /runner must be enabled/);
+});
+
+it('uses GitHub PAT and gh credentials, and creates a locked GitLab runner through its API', async () => {
+  const run = async (name, args) => {
+    expect(name).toBe('gh');
+    expect(args).toEqual(['auth', 'token', '--hostname', 'github.com']);
+    return 'fixture-gh\n';
+  };
+  expect(await githubToken({}, undefined, run)).toBe('fixture-gh');
+  expect(await githubToken({ GH_TOKEN: 'fixture-pat' }, undefined, run)).toBe(
+    'fixture-pat'
+  );
+  await rejects(
+    githubToken({ GH_TOKEN: 'wrong-scope' }, 'CUSTOM_TOKEN', run),
+    /Missing environment variable CUSTOM_TOKEN/
+  );
+  const gitlab = gitlabClient(
+    'https://gitlab.com',
+    'fixture',
+    async (url, { body }) => {
+      if (url.pathname === '/api/v4/user/runners') {
+        expect(JSON.parse(body)).toEqual({
+          runner_type: 'project_type',
+          project_id: 7,
+          description: 'Hive Runners lint',
+          locked: true,
+          tag_list: ['lint'],
+          run_untagged: false,
+        });
+        return globalThis.Response.json({ id: 42, token: 'glrt-created' });
+      }
+      return globalThis.Response.json({ id: 7, visibility: 'private' });
+    }
+  );
+  expect(await gitlab.createRunner('team/private', 'project', 'lint')).toEqual({
+    id: 42,
+    token: 'glrt-created',
   });
 });
 

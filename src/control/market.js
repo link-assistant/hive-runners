@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { integer, requireValue, secret } from '../config.js';
 import { HttpError, httpClient } from '../http.js';
+import { offerProfile, sameOfferProfile } from '../resources.js';
 
 export class RequestError extends Error {
   constructor(status, message) {
@@ -24,6 +25,27 @@ function checkRoute(active, previous, local, wholesale, upstreams) {
   }
 }
 
+function activationBudget(old, maxCents, credit, minimum) {
+  if (old?.maxCents !== undefined) {
+    if (maxCents !== undefined && maxCents !== old.maxCents) {
+      throw new RequestError(
+        409,
+        'Stop this activation to change its spending limit'
+      );
+    }
+    return old.maxCents;
+  }
+  const budget = maxCents ?? credit;
+  integer(budget, 1, Number.MAX_SAFE_INTEGER, 'activation spending limit');
+  if (budget < minimum || budget > credit) {
+    throw new RequestError(
+      402,
+      'The spending limit must cover the selected capacity and fit available credit'
+    );
+  }
+  return budget;
+}
+
 function priceMatches(remote, peer, own) {
   return (
     remote.currency === 'usd' &&
@@ -32,9 +54,8 @@ function priceMatches(remote, peer, own) {
     remote.rate <= peer.maxRate &&
     remote.scope?.toLowerCase() === own.scope.toLowerCase() &&
     remote.label === own.label &&
-    Number.isSafeInteger(remote.capacity) &&
-    remote.capacity > 0 &&
-    remote.capacity <= own.capacity
+    remote.capacity === own.capacity &&
+    sameOfferProfile(remote.profile, offerProfile(own))
   );
 }
 
@@ -60,24 +81,26 @@ function suppliers(store, config, { env, fetcher, active, funded }) {
       }
     }
     offers.sort((a, b) => a.rate - b.rate);
-    return offers.map(({ peer }) => peer);
+    return offers;
   }
 
-  async function claimPeer(id, peer, pool) {
+  async function claimPeer(id, peer, pool, rate) {
     const current = active(id);
     if (!current || !funded(id) || current.route !== 'upstream') {
       return;
     }
     if (!current.peer) {
-      store.put('lease', id, { ...current, peer: peer.origin });
+      store.put('lease', id, { ...current, peer: peer.origin, peerRate: rate });
     }
     await peerClient(peer)('/v1/wholesale', {
       method: 'PUT',
       body: {
         expires: current.expires,
-        rateCeiling: peer.maxRate,
+        rateCeiling: rate,
         scope: pool.scope,
         label: pool.label,
+        capacity: pool.capacity,
+        profile: offerProfile(pool),
       },
     });
   }
@@ -93,7 +116,7 @@ function suppliers(store, config, { env, fetcher, active, funded }) {
     }
     const current = store.get('lease', id);
     if (current?.peer === peer.origin) {
-      store.put('lease', id, { ...current, peer: null });
+      store.put('lease', id, { ...current, peer: null, peerRate: null });
     }
   }
 
@@ -105,17 +128,17 @@ function suppliers(store, config, { env, fetcher, active, funded }) {
         ({ origin }) => origin === lease.peer
       );
       requireValue(peer, 'Restore the configured upstream for this activation');
-      return claimPeer(id, peer, pool);
+      return claimPeer(id, peer, pool, lease.peerRate ?? peer.maxRate);
     }
-    for (const peer of await compatiblePeers(account, pool)) {
+    for (const { peer, rate } of await compatiblePeers(account, pool)) {
       try {
-        return await claimPeer(id, peer, pool);
+        return await claimPeer(id, peer, pool, rate);
       } catch (error) {
         await releaseRejectedClaim(id, peer, error);
       }
     }
     throw new Error(
-      'No upstream can supply the requested repository, label and price'
+      'No upstream can supply the requested runner profile, capacity and price'
     );
   }
 
@@ -144,16 +167,28 @@ export function market(
   fleet,
   { env, fetcher, now = Date.now } = {}
 ) {
+  for (const [id, lease] of store.entries('lease')) {
+    if (lease.profile && (lease.expires > now() || lease.peer)) {
+      const pool = config.pools[config.accounts[id]?.pool];
+      requireValue(
+        pool &&
+          lease.capacity === pool.capacity &&
+          sameOfferProfile(lease.profile, offerProfile(pool)),
+        `Account ${id} must finish draining before its runner configuration changes`
+      );
+    }
+  }
+
   const active = (id) => {
     const lease = store.get('lease', id);
     return lease && lease.expires > now() ? lease : null;
   };
 
-  const funded = (id) => {
+  const funded = (id, lease = active(id)) => {
     const account = config.accounts[id];
-    return (
-      ledger.credit(id) >= account.rate * config.pools[account.pool].capacity
-    );
+    const rate = lease?.rate ?? account.rate;
+    const available = Math.min(ledger.credit(id), ledger.remaining(id, lease));
+    return available >= rate * config.pools[account.pool].capacity;
   };
 
   const upstream = suppliers(store, config, { env, fetcher, active, funded });
@@ -167,7 +202,8 @@ export function market(
       scope,
       label,
       capacity,
-      rate,
+      rate: activation?.rate ?? rate,
+      profile: offerProfile(config.pools[pool]),
       currency: 'usd',
       available: !activation && !draining && funded(id) && fleet.hasRoom(pool),
       activation,
@@ -176,7 +212,7 @@ export function market(
     };
   }
 
-  function activate(id, expires, wholesale = false) {
+  function activate(id, expires, wholesale = false, maxCents) {
     integer(expires, now() + 1, now() + 3600000, 'activation expiration');
     if (!funded(id)) {
       throw new RequestError(402, 'Add credit before activating runners');
@@ -186,14 +222,25 @@ export function market(
     const old = active(id);
     const local = fleet.hasRoom(account.pool);
     checkRoute(old, previous, local, wholesale, account.upstreams.length);
-    const route = old?.route ?? (local ? 'local' : 'upstream');
+    const rate = old?.rate ?? account.rate;
+    const pool = config.pools[account.pool];
+    const max = activationBudget(
+      old,
+      maxCents,
+      ledger.credit(id),
+      rate * pool.capacity
+    );
     const lease = {
+      ...old,
       expires: Math.max(old?.expires ?? 0, expires),
       starts: old?.starts ?? Math.floor(now() / 1000) * 1000,
       window: old?.window ?? randomUUID(),
-      route,
+      route: old?.route ?? (local ? 'local' : 'upstream'),
       wholesale,
-      ...(old?.peer ? { peer: old.peer } : {}),
+      rate,
+      maxCents: max,
+      profile: offerProfile(pool),
+      capacity: pool.capacity,
     };
     return ledger.saveLease(id, lease);
   }

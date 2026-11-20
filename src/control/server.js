@@ -12,12 +12,14 @@ import {
   validateConfig,
 } from '../config.js';
 import { fleet } from './fleet.js';
+import { gitlabEvents } from './gitlab-events.js';
 import { market, RequestError } from './market.js';
 import { openStore } from './store.js';
 import { stripePayments, verifyStripe } from './stripe.js';
 import { digest, ledger, secureEqual } from './usage.js';
 import { formatNotation, linoMediaType, parseNotation } from '../notation.js';
 import { parseLinks } from '@link-foundation/ui-core';
+import { sameOfferProfile } from '../resources.js';
 import { publicPages, portalScriptPolicy } from './web.js';
 
 function hash(value) {
@@ -55,6 +57,9 @@ function githubSignatures(config, env) {
     Object.values(config.accounts).map(({ pool }) => pool)
   );
   for (const [name, pool] of Object.entries(config.pools)) {
+    if (pool.platform !== 'github') {
+      continue;
+    }
     const key = secret(pool.webhookSecretEnv, env);
     const names = poolsBySecret.get(key) ?? new Set();
     names.add(name);
@@ -165,17 +170,18 @@ async function inputObject(request) {
   return Object.assign(Object.create(null), input);
 }
 
-function wholesaleExpiration(input, offer) {
+function checkQuote(input, offer) {
   if (
     typeof input.scope !== 'string' ||
     input.scope.toLowerCase() !== offer.scope.toLowerCase() ||
     input.label !== offer.label ||
+    input.capacity !== offer.capacity ||
+    !sameOfferProfile(input.profile, offer.profile) ||
     !Number.isSafeInteger(input.rateCeiling) ||
     input.rateCeiling < offer.rate
   ) {
-    throw new RequestError(409, 'Wholesale offer changed');
+    throw new RequestError(409, 'Runner offer changed');
   }
-  return input.expires;
 }
 
 function authenticatedRoutes({ accountFor, commerce, payments, now }) {
@@ -195,13 +201,16 @@ function authenticatedRoutes({ accountFor, commerce, payments, now }) {
       }
       if (method === 'PUT') {
         const input = await inputObject(request);
+        if (wholesale || Object.hasOwn(input, 'profile')) {
+          checkQuote(input, commerce.offer(id));
+        }
         const expires = wholesale
-          ? wholesaleExpiration(input, commerce.offer(id))
+          ? input.expires
           : now() + integer(input.minutes, 1, 60, 'activation minutes') * 60000;
         return respond(
           request,
           response,
-          commerce.activate(id, expires, wholesale)
+          commerce.activate(id, expires, wholesale, input.maxCents)
         );
       }
     }
@@ -235,7 +244,8 @@ function prometheus(workloads, scale, config, healthy) {
   for (const [name, { queued, running }] of Object.entries(workloads)) {
     const machines = scale.poolMachines(name);
     for (const machine of machines) {
-      const { availableMemoryMiB, load1, runners } = machine.metrics ?? {};
+      const { availableMemoryMiB, availableDiskMiB, load1, runners } =
+        machine.metrics ?? {};
       if (Number.isFinite(availableMemoryMiB) && Number.isFinite(load1)) {
         const labels = `{pool="${name}",machine="${machine.name}"}`;
         lines.push(
@@ -243,6 +253,11 @@ function prometheus(workloads, scale, config, healthy) {
         );
         lines.push(`hive_machine_load1${labels} ${load1}`);
         lines.push(`hive_machine_runner_pods${labels} ${runners}`);
+        if (Number.isFinite(availableDiskMiB)) {
+          lines.push(
+            `hive_machine_available_disk_mib${labels} ${availableDiskMiB}`
+          );
+        }
       }
     }
     const values = {
@@ -256,6 +271,65 @@ function prometheus(workloads, scale, config, healthy) {
     }
   }
   return `${lines.join('\n')}\n`;
+}
+
+function webhookRoutes({
+  githubKeys,
+  usage,
+  payments,
+  stripeSecret,
+  gitlab,
+  now,
+}) {
+  return async (path, request, response) => {
+    if (
+      request.method === 'POST' &&
+      path === '/webhooks/github' &&
+      githubKeys.size > 0
+    ) {
+      const bytes = await body(request);
+      const pools = signedPools(
+        githubKeys,
+        bytes,
+        request.headers['x-hub-signature-256']
+      );
+      if (request.headers['x-github-event'] === 'workflow_job') {
+        usage.ingest(parse(bytes), pools);
+      }
+      json(response, { received: true }, 202);
+      return true;
+    }
+    if (request.method === 'POST' && path === '/webhooks/stripe' && payments) {
+      const bytes = await body(request);
+      if (
+        !verifyStripe(
+          bytes,
+          request.headers['stripe-signature'],
+          stripeSecret,
+          now
+        )
+      ) {
+        throw new RequestError(401, 'Invalid webhook signature');
+      }
+      payments.ingest(parse(bytes));
+      json(response, { received: true }, 202);
+      return true;
+    }
+    if (
+      request.method === 'POST' &&
+      path === '/webhooks/gitlab' &&
+      gitlab.enabled
+    ) {
+      const bytes = await body(request);
+      const authorized = gitlab.authenticate(request.headers, bytes);
+      if (request.headers['x-gitlab-event'] === 'Job Hook') {
+        await gitlab.ingest(parse(bytes), authorized);
+      }
+      json(response, { received: true }, 202);
+      return true;
+    }
+    return false;
+  };
 }
 
 export function controlPlane(
@@ -274,6 +348,7 @@ export function controlPlane(
   const accountFor = authorize(config, env);
   const usage = ledger(store, config, now);
   const githubKeys = githubSignatures(config, env);
+  const gitlab = gitlabEvents(config, usage, { env, now, fetcher });
   const stripeSecret =
     env.HIVE_STRIPE_SECRET_KEY && secret('HIVE_STRIPE_WEBHOOK_SECRET', env);
   const payments =
@@ -297,6 +372,15 @@ export function controlPlane(
   const commerce = market(store, config, usage, scale, { env, fetcher, now });
   const api = authenticatedRoutes({ accountFor, commerce, payments, now });
 
+  const webhooks = webhookRoutes({
+    githubKeys,
+    usage,
+    payments,
+    stripeSecret,
+    gitlab,
+    now,
+  });
+
   async function route(request, response) {
     const { pathname: path } = new URL(request.url, 'http://localhost');
     if (request.method === 'GET') {
@@ -315,36 +399,8 @@ export function controlPlane(
         return;
       }
     }
-    if (
-      request.method === 'POST' &&
-      path === '/webhooks/github' &&
-      githubKeys.size > 0
-    ) {
-      const bytes = await body(request);
-      const pools = signedPools(
-        githubKeys,
-        bytes,
-        request.headers['x-hub-signature-256']
-      );
-      if (request.headers['x-github-event'] === 'workflow_job') {
-        usage.ingest(parse(bytes), pools);
-      }
-      return json(response, { received: true }, 202);
-    }
-    if (request.method === 'POST' && path === '/webhooks/stripe' && payments) {
-      const bytes = await body(request);
-      if (
-        !verifyStripe(
-          bytes,
-          request.headers['stripe-signature'],
-          stripeSecret,
-          now
-        )
-      ) {
-        throw new RequestError(401, 'Invalid webhook signature');
-      }
-      payments.ingest(parse(bytes));
-      return json(response, { received: true }, 202);
+    if (await webhooks(path, request, response)) {
+      return;
     }
     if (path.startsWith('/v1/')) {
       return api(request, response, path);
@@ -367,8 +423,8 @@ export function controlPlane(
           error instanceof RequestError
             ? error.message
             : 'Request could not be processed';
-        if (!(error instanceof RequestError)) {
-          logger.error('Hive Runners request failed', error.name);
+        if (!(error instanceof RequestError) || error.status >= 500) {
+          logger.error('Hive Runners request failed', message, error.name);
         }
         if (!response.headersSent && !response.destroyed) {
           const status = error instanceof RequestError ? error.status : 422;

@@ -1,11 +1,17 @@
 import { requireValue } from '../config.js';
+import { allocation, sizing } from '../resources.js';
 
 function identity(pool) {
-  return [
+  const github = [
     pool.scope.toLowerCase(),
     pool.label,
-    ...Object.values(pool.spareHost),
+    pool.spareHost.ip,
+    pool.spareHost.user,
+    pool.spareHost.hostKey,
   ].join('/');
+  return pool.platform === 'gitlab'
+    ? [pool.gitlabUrl, pool.gitlabRunnerId, github].join('/')
+    : github;
 }
 
 export function spareFleet(store, config, { now, host, report }) {
@@ -18,13 +24,17 @@ export function spareFleet(store, config, { now, host, report }) {
       if (
         !pool?.spareHost &&
         machine.phase === 'parked' &&
-        !assigned.has(machine.ip)
+        (machine.profile?.startsWith('hive-') || !assigned.has(machine.ip))
       ) {
         store.delete('spare', name);
         continue;
       }
       requireValue(
-        pool?.spareHost && identity(pool) === machine.binding,
+        pool?.spareHost &&
+          identity(pool) === machine.binding &&
+          (machine.phase === 'parked' ||
+            !machine.allocation ||
+            machine.allocation === allocation(pool)),
         `Spare host ${name} must be retired and its state explicitly released before changing its assignment`
       );
     }
@@ -37,11 +47,13 @@ export function spareFleet(store, config, { now, host, report }) {
 
   async function enable(name, pool, target, machine) {
     const timestamp = now();
-    if (machine?.phase !== 'active') {
+    if (machine?.phase !== 'active' || !machine.allocation) {
       store.put('spare', name, {
         name,
         binding: identity(pool),
         phase: 'booting',
+        profile: pool.profile,
+        allocation: allocation(pool),
         ip: target.ip,
       });
       await host(pool, target);
@@ -54,6 +66,8 @@ export function spareFleet(store, config, { now, host, report }) {
       name,
       binding: identity(pool),
       phase: 'active',
+      profile: pool.profile,
+      allocation: allocation(pool),
       ip: target.ip,
       observed: refresh ? timestamp : machine.observed,
       metrics,
@@ -94,7 +108,15 @@ export function spareFleet(store, config, { now, host, report }) {
       }
       const machine = store.get('spare', name);
       const { ip, user, hostKey } = pool.spareHost;
-      const target = { ip, user, knownHosts: `${ip} ${hostKey}\n` };
+      const coLocated = Object.values(config.pools).filter(
+        (peer) => peer.spareHost?.ip === ip
+      );
+      const target = {
+        ip,
+        user,
+        knownHosts: `${ip} ${hostKey}\n`,
+        minimum: sizing(coLocated).minimum,
+      };
       const { queued, running } = workloads[name];
       try {
         const available =

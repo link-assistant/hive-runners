@@ -1,11 +1,92 @@
 import {
+  arcCredentials,
   githubScope,
   integer,
   match,
   repositoryName,
   requireValue,
 } from './config.js';
+import { sign } from 'node:crypto';
 import { httpClient } from './http.js';
+import { runProcess } from './process.js';
+
+export async function githubToken(
+  env = process.env,
+  name = 'HIVE_GITHUB_TOKEN',
+  run = runProcess
+) {
+  for (const key of name === 'HIVE_GITHUB_TOKEN'
+    ? [name, 'GH_TOKEN', 'GITHUB_TOKEN']
+    : [name]) {
+    if (Object.hasOwn(env, key) && env[key]?.trim()) {
+      return env[key].trim();
+    }
+  }
+  requireValue(
+    name === 'HIVE_GITHUB_TOKEN',
+    `Missing environment variable ${name}`
+  );
+  const token = (
+    await run('gh', ['auth', 'token', '--hostname', 'github.com'], { env })
+  ).trim();
+  requireValue(
+    token,
+    'Authenticate with gh auth login or supply a GitHub token'
+  );
+  return token;
+}
+
+async function installationToken(credentials, fetcher) {
+  const now = Math.floor(Date.now() / 1000);
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString('base64url');
+  const jwt = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({
+    iat: now - 60,
+    exp: now + 480,
+    iss: credentials.github_app_id,
+  })}`;
+  const signature = sign(
+    'RSA-SHA256',
+    Buffer.from(jwt),
+    credentials.github_app_private_key
+  );
+  const api = httpClient('https://api.github.com', {
+    headers: {
+      authorization: `Bearer ${jwt}.${signature.toString('base64url')}`,
+      accept: 'application/vnd.github+json',
+    },
+    fetcher,
+  });
+  const id = match(
+    credentials.github_app_installation_id,
+    /^[1-9][0-9]*$/,
+    'GitHub App installation ID'
+  );
+  const result = await api(`/app/installations/${id}/access_tokens`, {
+    method: 'POST',
+  });
+  requireValue(
+    typeof result.token === 'string' && result.token,
+    'GitHub App installation did not issue a token'
+  );
+  return result.token;
+}
+
+export async function githubRunnerAuth(pool, { env, run, fetcher }) {
+  const {
+    credentialsEnv = 'HIVE_ARC_CREDENTIALS',
+    groupTokenEnv = 'HIVE_GITHUB_TOKEN',
+  } = pool;
+  const credentials = env[credentialsEnv]?.trim()
+    ? arcCredentials(credentialsEnv, env)
+    : { github_token: await githubToken(env, groupTokenEnv, run) };
+  const token =
+    groupTokenEnv !== 'HIVE_GITHUB_TOKEN' || env[groupTokenEnv]?.trim()
+      ? await githubToken(env, groupTokenEnv, run)
+      : (credentials.github_token ??
+        (await installationToken(credentials, fetcher)));
+  return { credentials, client: githubClient(token, fetcher) };
+}
 
 export function githubClient(token, fetcher) {
   const api = httpClient('https://api.github.com', {

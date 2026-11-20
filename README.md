@@ -1,6 +1,6 @@
 # Hive Runners
 
-Hive Runners provisions private GitHub Actions runner pools and scales jobs with GitHub’s official Actions Runner Controller (ARC). Each fleet machine runs Minikube. The control plane can provision and retire machines through Contabo or Hetzner Cloud, or deploy ARC to an existing SSH inventory.
+Hive Runners provisions private GitHub Actions and GitLab CI pools using GitHub’s official Actions Runner Controller (ARC) and GitLab Runner. Each Linux fleet machine runs Minikube and can expose NVIDIA GPUs to jobs. The control plane can provision and retire machines through Contabo or Hetzner Cloud, or deploy pools to an existing SSH inventory.
 
 The same control plane can sell prepaid runner minutes, sell spare fleet quota, or buy capacity from configured Hive Runners peers. The landing page and customer portal ship with the Docker image and Helm chart.
 
@@ -11,6 +11,7 @@ Use Node.js 24 or newer and clone this repository to try the CLI.
 ```bash
 npm ci
 node bin/hive-runners.js init
+node bin/hive-runners.js capacity
 node bin/hive-runners.js render
 node bin/hive-runners.js --help
 ```
@@ -23,7 +24,7 @@ node bin/hive-runners.js deploy --inventory ./inventory.lino
 
 ## Configuration
 
-The [operator guide](docs/hive-runners.md) covers SSH and GitHub credentials, cloud profiles, CI proposals, deployments, monitoring, billing, and federation. The [generated CLI reference](docs/generated-cli.md) and [issue case study](docs/case-studies/issue-1/README.md) cover commands and the design evidence.
+The operator guide covers SSH and platform credentials, mixed hosts, GPU profiles, deployment, monitoring, billing, and federation. [Operator guide](docs/hive-runners.md) · [CLI reference](docs/generated-cli.md) · [Issue case study](docs/case-studies/issue-1/README.md)
 
 ## Development
 
