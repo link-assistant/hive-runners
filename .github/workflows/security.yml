@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     - cron: '0 6 * * 1'
   workflow_dispatch:
@@ -28,8 +28,8 @@ jobs:
     env:
       CODEQL_ACTION_DIFF_INFORMED_QUERIES: 'false'
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-codeql-${{ matrix.language }}
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-codeql-${{ matrix.language }}-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     permissions:
       actions: read
       contents: read
@@ -74,8 +74,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-dependency-graph
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-dependency-graph-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     outputs:
       enabled: ${{ steps.graph.outputs.enabled }}
     steps:
@@ -102,8 +102,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-dependency-review
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-dependency-review-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     permissions:
       contents: read
       pull-requests: write
@@ -127,8 +127,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-npm-audit-${{ matrix.directory }}
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-npm-audit-${{ matrix.directory }}-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     strategy:
       fail-fast: false
       matrix:
@@ -154,7 +154,14 @@ jobs:
           AUDIT_DIR: ${{ matrix.directory }}
           AUDIT_LEVEL: high
           AUDIT_FIXABLE_LEVEL: ${{ github.event_name == 'schedule' && 'moderate' || '' }}
-        run: node "$GITHUB_WORKSPACE/scripts/npm-audit-report.mjs"
+        run: bash "$GITHUB_WORKSPACE/scripts/run-with-budget-warning.sh" 120 "npm security audit" node "$GITHUB_WORKSPACE/scripts/npm-audit-report.mjs"
+
+      - name: Check live npm deprecations
+        if: ${{ !cancelled() }}
+        working-directory: ${{ matrix.directory }}
+        env:
+          DEPRECATED_FAIL: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+        run: bash "$GITHUB_WORKSPACE/scripts/run-with-budget-warning.sh" 120 "Live npm deprecation check" node "$GITHUB_WORKSPACE/scripts/check-deprecated-packages.mjs" package-lock.json
 
   # Terminal status gate: runs even when the jobs above fail or are
   # cancelled, and turns a `timeout-minutes` kill (reported as cancelled)
@@ -165,8 +172,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     # A status function is required: without one the gate inherits the
     # implicit "every dependency succeeded" condition and is skipped in
     # exactly the runs it exists to report.
@@ -195,6 +202,7 @@ jobs:
       - name: Fail the run when a required job was cancelled or failed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_EVENT_ACTION: ${{ github.event.action }}
           GH_TOKEN: ${{ github.token }}
           RUN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           HEAD_REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.number) || github.ref }}

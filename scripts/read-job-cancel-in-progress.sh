@@ -33,9 +33,15 @@ def is_blank(line):
 
 
 def normalise(raw):
-    if "${{" in raw:
-        return "unknown"
-    raw = re.sub(r"\s+#.*$", "", raw).strip().strip("\x27\"").lower()
+    raw = re.sub(r"\s+#.*$", "", raw).strip()
+    sync_only = "${{ github.event_name == \x27pull_request\x27 && github.event.action == \x27synchronize\x27 }}"
+    if raw == sync_only:
+        event = os.environ.get("GITHUB_EVENT_NAME")
+        action = os.environ.get("CI_EVENT_ACTION")
+        if not event or (event == "pull_request" and not action):
+            return "unknown"
+        return "true" if event == "pull_request" and action == "synchronize" else "false"
+    raw = raw.strip("\x27\"").lower()
     if raw in ("true", "false"):
         return raw
     return "unknown"

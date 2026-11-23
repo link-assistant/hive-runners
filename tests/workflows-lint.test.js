@@ -216,13 +216,13 @@ describe('reproducible workflow tooling and runner policy', () => {
     expect(workflowsWorkflow).toContain('zizmorcore/zizmor-action@v0.6.4');
     expect(['1.30.0', '1.30.1']).toContain(version);
   });
-  it('pins both secretlint packages to the same exact version', () => {
-    const cli = releaseWorkflow.match(/-p secretlint@(\d+\.\d+\.\d+)/)?.[1];
-    const preset = releaseWorkflow.match(
-      /-p @secretlint\/secretlint-rule-preset-recommend@(\d+\.\d+\.\d+)/
-    )?.[1];
-    expect(cli).toBe('13.0.7');
-    expect(preset).toBe(cli);
+  it('pins Secretlint with its built-in recommended preset', () => {
+    expect(releaseWorkflow.match(/-p secretlint@(\d+\.\d+\.\d+)/)?.[1]).toBe(
+      '14.0.0'
+    );
+    expect(releaseWorkflow).not.toContain(
+      '-p @secretlint/secretlint-rule-preset-recommend@'
+    );
   });
   it('pins every hosted OS image in every workflow', () => {
     for (const file of activeWorkflows) {

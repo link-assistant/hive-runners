@@ -1,0 +1,84 @@
+# CI/CD investigation for issue #3 and pull request #4
+
+The [issue](https://github.com/link-assistant/hive-runners/issues/3) reports three failing workflows on `main` and requests a full comparison with the JavaScript CI/CD template and the Hive Mind practices. The initial issue, pull request conversation, inline review comments, and submitted reviews were collected separately. The initial issue and PR had no comments or reviews, and the sub-issue list was empty. [Pull request #4](https://github.com/link-assistant/hive-runners/pull/4)
+
+## Evidence and timeline
+
+[baseline-evidence.tar.gz](baseline-evidence.tar.gz) contains the original GitHub CLI logs, run and job metadata, artifact indexes, issue and review records, repository prerequisite responses, and the four upstream reports. Jobs with no log have run and job metadata in the archive. Log line numbers below apply to the archived CLI output. For example, extract the original Pages failure with:
+
+```sh
+tar -xOzf baseline-evidence.tar.gz ci-logs/44769889390-attempt-1.log | sed -n '176,183p;1356,1360p'
+```
+
+| UTC date | Event |
+| --- | --- |
+| 2026-11-19 | The separate JavaScript-first Rust fixture passed on `e76c0f2` in [run 44594318917](https://github.com/link-assistant/hive-runners/actions/runs/44594318917). |
+| 2026-11-20 | All five workflows passed on the last revision of [PR #2](https://github.com/link-assistant/hive-runners/pull/2), `f1791c9`. Behind those green PR checks, release-only prerequisites still needed repository setup. |
+| 2026-11-20 16:05:46 | PR #2 merged as `22e31b63d9ee4e5b15d35ac84a8649d6d2084551`. The main workflows started at 16:05:49. Link and workflow checks passed. Example app, Security, and Checks and release failed. |
+| 2026-11-20 | The automated rerun controller confirmed that the jobs acquired runners. No rerun could fix the rejected prerequisites. See [run 44770292684](https://github.com/link-assistant/hive-runners/actions/runs/44770292684) and archived line 175. |
+| 2026-11-23 10:01:11 | Issue #3 opened with the seven runs. |
+| 2026-11-23 10:02:01 | Draft PR #4 opened at `46d2d58f6a3c64b05b27f17ec483573bb21e22dc`. The initial Security and release runs passed, but the release workflow skipped tests, lint, and compilation on the placeholder-only diff. |
+| 2026-11-23 | Refreshed API responses still showed Pages unavailable (404 and `has_pages: false`), a generic HTTP 403 from dependency comparison, and an unpublished npm package (E404 and no repository `NPM_TOKEN`). The matching template defects were reported upstream. |
+
+## Root causes, options, and verification
+
+| Requirement | Cause and evidence | Implementation and regression checks |
+| --- | --- | --- |
+| Keep the web build and diagnose Pages setup | Build web app failed before installing dependencies because the repository's Pages source was unavailable. The final gate reported `web-build` as the failed job. [Run 44769889390](https://github.com/link-assistant/hive-runners/actions/runs/44769889390), lines 179–180 and 1358–1359. | Run an independent, read-only Pages prerequisite on `main`. Run the build on both events. Require both for deployment and use the exact uploaded artifact ID. Check the Pages state, malformed responses, and the deployment retry and idempotency paths in `check-pages.test.js`, `deploy-pages.test.js`, and `pipeline-status.test.js`. |
+| Preserve dependency review and report its actual status | The dependency comparison API returned a bare `Forbidden`. The old script attributed every generic 403 to a disabled graph, which the response cannot distinguish from a permission problem. [Run 44769889902](https://github.com/link-assistant/hive-runners/actions/runs/44769889902), lines 5216–5218 and 5435. | Distinguish an explicitly disabled graph, a permission or availability refusal, a transient response, and an unexpected status. Give `main` an actionable error, use a PR notice for known prerequisites, and run CodeQL and npm audit independently. Verify transport classification, retries, mode handling, and graph review wiring in `dependency-graph.test.js` and `security-workflow.test.js`. |
+| Keep credential-dependent checks off PR code and diagnose release setup | npm had no package or trusted publisher to exchange and the repository had no bootstrap token. The original PR also ran preflight with the release credential environment, even though it never publishes. [Run 44769889935](https://github.com/link-assistant/hive-runners/actions/runs/44769889935), lines 153–161 and 9279. | Require strict preflight for main pushes and instant releases dispatched on main. Prefer a successful npm OIDC exchange. For bootstrap, report which granular publish scope and 2FA settings are needed and check token authentication without assuming an org member must appear in package maintainer metadata. PRs continue independent checks. `release-preflight.test.js` covers workflow conditions and mocked exchange and token responses. |
+| Remove dependency and runtime warnings | Secretlint's v13 recommended preset reported its retirement during the lint job. The artifact transport lock included vulnerable `fast-xml-parser`. [Release run](https://github.com/link-assistant/hive-runners/actions/runs/44769889935), line 1402, and [Security run](https://github.com/link-assistant/hive-runners/actions/runs/44769889902), line 4646. | Pin Secretlint 14 with its built-in preset and update the composite action lockfile to `fast-xml-parser` 5.12.1. Run live npm deprecation checks for each lockfile. `deprecated-packages.test.js` covers deduplication, npm aliases, metadata missing from lockfiles, errors, and scheduled enforcement. All three local npm audits and live metadata probes were clean. |
+| Make a green PR gate mean the merge result was checked | A previous implementation could classify only the latest event range, and changed-line lint could skip warnings reported on an unchanged declaration in a changed file. Root Docker configuration was absent from the Docker build trigger set. | Classify the diff between the first parent and GitHub's PR merge commit, the event range on main pushes, and all tracked paths when history is unavailable. Match both sides of renames and lint warnings across changed files. Test the root Dockerfile and context and include Docker metadata in the correct changeset and test conditions. See `detect-code-changes.test.js`, `lint-changed-files.test.js`, and `docker-build.test.js`. |
+| Surface overruns and keep required validation on its revision | Earlier budget tests missed shell syntax and the final output line without a newline. Broad cancellation mixed ready, manual, and main validation with supersedable PR checks. | Budget tool and dependency installs, verify workflow shell commands and the composite action in tests, capture the final output line, and retain the separate step/job deadlines. Only PR synchronize checks cancel earlier synchronize checks. Ready-for-review reruns the full gate, including Linux packaging and Docker validation. See `run-with-budget-warning.test.js`, `ci-timeouts.test.js`, `workflow-reliability.test.js`, and `pipeline-status.test.js`. |
+| Compare the full tree and report equivalent defects upstream | Shared template updates landed after this repository's baseline. Four independent workflow defects remained in the reference. | See the file-by-file comparison and upstream links below. Preserve artifact, compilation, audit, scan, documentation, and terminal status assertions for every relevant workflow. |
+
+### Why these approaches
+
+- `actions/configure-pages` can supply build metadata and optionally enable Pages with privileged credentials. The build already has its base configuration and used none of those outputs. A separate read-only job gives that build its own result. GitHub's standard deploy action is an alternative to the existing deployment script. Keeping the script retains tested retry, adoption after an ambiguous response, and polling for the exact artifact. [Pages publishing source](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site), [official configure action](https://github.com/actions/configure-pages), [official deploy action](https://github.com/actions/deploy-pages)
+- The official dependency review action still supplies commit-to-commit review when the REST API is available. npm audit covers advisories in the three npm lockfiles independently. It has no GitHub graph comparison, source license policy, or OpenSSF scorecard coverage. Live version lookups supply deprecation metadata that can change after a lockfile is generated. [GitHub dependency review](https://github.com/actions/dependency-review-action), [enable the graph](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/enable-dependency-graph), [npm audit](https://docs.npmjs.com/cli/commands/npm-audit)
+- npm Trusted Publishing and its short-lived token are the routine release path. The first package publication requires a scoped granular token or a manually authorized first publish. `npm whoami` can establish token authentication. A successful write still requires package scope and applicable 2FA permissions. The existing Changesets path stages the patch version on merge. [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/), [npm access tokens](https://docs.npmjs.com/about-access-tokens), [Changesets](https://github.com/changesets/changesets)
+- Use GitHub's merge revision for PR coverage, rather than a path list calculated from the latest push. Retain earlier cancellation for superseded synchronize events. `actionlint` checks workflow syntax and expressions, ShellCheck checks the shell entry points, and Zizmor audits workflow security. Keep those checks alongside tests of status-gate dependency lists. [GitHub PR events](https://docs.github.com/en/actions/reference/events-that-trigger-workflows#pull_request), [concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency), [actionlint](https://github.com/rhysd/actionlint), [ShellCheck](https://github.com/koalaman/shellcheck), [Zizmor](https://github.com/zizmorcore/zizmor)
+
+## Full template comparison
+
+[template-tree.tsv](template-tree.tsv) compares all 652 tracked paths in the union of the issue revision and the [template revision](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/tree/8e72538d579d904aff818c2447fb3c2413d3a989). There are 509 matching blobs, 50 differing paths, 86 paths unique to Hive Runners, and 7 unique to the template. The inventory includes all historical data and application paths, and can be regenerated with `git ls-tree -rz` for either revision.
+
+| Paths | Result |
+| --- | --- |
+| `.github/` | 12 files identical and 7 diverged. The five actively changed workflows and the composite action plus its lockfile incorporate applicable template fixes. The workflow controllers, CodeQL configuration, audit policy, and update settings already matched. |
+| `scripts/`, `.husky/` | 73 scripts and the one Husky hook matched. Four shared scripts differed. The two new template scripts were adopted and changed-file lint superseded the local changed-line implementation. Shared scripts also gained prerequisite, change-detection, Docker, and cancellation handling. |
+| Root configuration, lockfiles, Changesets, tests and docs | Keep the Hive Runners package identity, runtime and distribution, dependency pins, lockfiles and release history. The template's release changes are represented by a local patch changeset. The existing format, generated documentation, line limit, documentation links, and status policies still run. |
+| Product examples, Docker, Helm and monitoring | Preserve the runner fleet, Linux CI and packaging, native Docker architectures, and product-specific deployment files. The template's macOS-hosted iOS job is outside the supported CI matrix. Local iOS and opt-in Android instructions and checks remain. |
+| Rust template and example | Keep the existing, isolated JavaScript-first Rust reference and its fixture CI. This package has no production Rust opt-in or native implementation to gate. |
+
+The upstream template addressed npm and artifact warnings, whole-file lint, and time budgets in [PR #309](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/pull/309). [PR #311](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/pull/311) tightened Pages deployment artifact identity. Four additional reports contain reproductions, workarounds, and patch suggestions:
+
+- [Template #312](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/issues/312) covers the Pages prerequisite suppressing the build.
+- [Template #313](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/issues/313) covers the ambiguous dependency graph 403.
+- [Template #314](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/issues/314) covers the release preflight event and permission boundary.
+- [Template #315](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/issues/315) covers cumulative PR validation and Docker path tracking.
+
+## Hive Mind practices
+
+This comparison uses the 17 recommendations in the [pinned guide](https://github.com/link-assistant/hive-mind/blob/65e144316979886d086595419356b5f1152b99ab/docs/CI-CD-BEST-PRACTICES.md).
+
+| Guide sections | Application |
+| --- | --- |
+| 1 and 5 | Relevant change gates, early lint and compilation, and draft deferral of Docker and desktop packaging. Opened and reopened PRs retain early validation. Ready events verify the same commit in full. |
+| 2 through 4 and 8 | File limits, Prettier, ESLint, duplication check and the Husky hook remain. PR errors and warnings in changed files fail, and full lint remains strict. |
+| 6, 7 and 9 | Changesets stages version changes, PRs validate the GitHub merge result, and guarded main release jobs verify an actual registry publication before success. |
+| 10 | Matrix coordinates scope validation jobs. Only superseded PR synchronize runs cancel, and writers keep queued serialization. |
+| 11 and 12 | Secretlint scans tracked data including archives. Generated documentation and strict Lychee validation remain. |
+| 13 and 14 | Existing Docker publishing builds amd64 and arm64 on native runners. Actionlint, ShellCheck, Zizmor and terminal status coverage stay in the meta-workflow. |
+| 15 and 16 | Keep GitHub graph review, CodeQL, npm advisories, live deprecation checks, and trusted release preflight with actionable configuration errors. |
+| 17 | Keep the unacquired-runner controller, record original and rerun evidence, and use bounded transport retries and quiet-by-default tracing. |
+
+## Production verification
+
+The PR can exercise builds, status gates, security scans, and the simulated prerequisite outcomes. A repository administrator still needs to:
+
+- Enable the GitHub Actions publishing source in [Pages settings](https://github.com/link-assistant/hive-runners/settings/pages) before an actual deployment can be verified.
+- Enable or confirm Dependency graph in [Advanced Security settings](https://github.com/link-assistant/hive-runners/settings/security_analysis), and investigate the token's contents read permission if the comparison still returns 403. Successful live dependency review requires a 200 from the comparison API.
+- Create the first npm package version through an authorized granular token or manual publish and configure the trusted publisher for `link-assistant/hive-runners` and `release.yml`. Actual publication requires owner authorization.
+
+`PAGES_VERBOSE`, `DEPENDENCY_GRAPH_DEBUG`, `CI_SCRIPTS_DEBUG`, `LINT_VERBOSE`, and `BUDGET_VERBOSE` remain opt-in. The PR checks and run URLs track verification of the pushed revision. Historical runs in the baseline archive keep their original purposes and conclusions.

@@ -55,7 +55,7 @@ describe('security workflow', () => {
 
     expect(codeql).toContain('    timeout-minutes: 30');
     expect(codeql).toContain(
-      '      group: check-${{ github.workflow }}-${{ github.ref }}-codeql-${{ matrix.language }}\n      cancel-in-progress: true'
+      '      group: check-${{ github.workflow }}-${{ github.ref }}-codeql-${{ matrix.language }}-'
     );
     expect(codeql).toContain(
       '        language: [javascript-typescript, actions]'
@@ -81,7 +81,7 @@ describe('security workflow', () => {
     );
     expect(dependencyReview).toContain('    timeout-minutes: 10');
     expect(dependencyReview).toContain(
-      '      group: check-${{ github.workflow }}-${{ github.ref }}-dependency-review\n      cancel-in-progress: true'
+      '      group: check-${{ github.workflow }}-${{ github.ref }}-dependency-review-'
     );
     expect(dependencyReview).toContain('      pull-requests: write');
     expect(dependencyReview).toContain(
@@ -127,7 +127,10 @@ describe('security workflow', () => {
     expect(audit).toContain('node-version: 24');
     expect(audit).toContain('working-directory: ${{ matrix.directory }}');
     expect(audit).toContain(
-      'run: node "$GITHUB_WORKSPACE/scripts/npm-audit-report.mjs"'
+      'node "$GITHUB_WORKSPACE/scripts/npm-audit-report.mjs"'
+    );
+    expect(audit).toContain(
+      'node "$GITHUB_WORKSPACE/scripts/check-deprecated-packages.mjs"'
     );
     expect(audit).toContain('AUDIT_DIR: ${{ matrix.directory }}');
     expect(audit).toContain('AUDIT_LEVEL: high');

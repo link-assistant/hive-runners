@@ -156,6 +156,8 @@ describe('pipeline status gate', () => {
         const context = {
           RUN_SHA: fork,
           HEAD_REF: 'refs/pull/7/head',
+          GITHUB_EVENT_NAME: 'pull_request',
+          CI_EVENT_ACTION: 'synchronize',
           BRANCH_NAME: 'main',
           GIT_REMOTE: dir,
           WORKFLOW_FILE: '.github/workflows/security.yml',
@@ -437,6 +439,8 @@ describe('pipeline status supersede detection', () => {
           RUN_SHA: 'aaa111',
           BRANCH_HEAD_SHA: 'bbb222',
           WORKFLOW_FILE: '.github/workflows/links.yml',
+          GITHUB_EVENT_NAME: 'pull_request',
+          CI_EVENT_ACTION: 'synchronize',
         }
       );
 
@@ -459,6 +463,8 @@ describe('pipeline status supersede detection', () => {
           RUN_SHA: 'aaa111',
           BRANCH_HEAD_SHA: 'bbb222',
           WORKFLOW_FILE: '.github/workflows/release.yml',
+          GITHUB_EVENT_NAME: 'pull_request',
+          CI_EVENT_ACTION: 'synchronize',
         }
       );
 
@@ -481,6 +487,8 @@ describe('pipeline status supersede detection', () => {
           RUN_SHA: 'aaa111',
           BRANCH_HEAD_SHA: head,
           WORKFLOW_FILE: '.github/workflows/release.yml',
+          GITHUB_EVENT_NAME: 'pull_request',
+          CI_EVENT_ACTION: 'synchronize',
         });
         expect(result.status).toBe(status);
         expect(result.stdout).toContain(
@@ -493,7 +501,27 @@ describe('pipeline status supersede detection', () => {
   );
 
   itUnless(sandboxed, noPosixShell)(
-    'fails closed when cancel-in-progress is an expression',
+    'rejects a cancelled main or ready run after the ref moves',
+    () => {
+      for (const [event, action] of [
+        ['push', ''],
+        ['pull_request', 'ready_for_review'],
+      ]) {
+        const result = runGate(cancelled, {
+          RUN_SHA: 'aaa111',
+          BRANCH_HEAD_SHA: 'bbb222',
+          WORKFLOW_FILE: '.github/workflows/release.yml',
+          GITHUB_EVENT_NAME: event,
+          CI_EVENT_ACTION: action,
+        });
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain('cancel-in-progress: false');
+      }
+    }
+  );
+
+  itUnless(sandboxed, noPosixShell)(
+    'fails closed on an unsupported cancel-in-progress expression',
     () => {
       const root = mkdtempSync(path.join(tmpdir(), 'gate-expression-'));
       try {
@@ -501,7 +529,7 @@ describe('pipeline status supersede detection', () => {
         writeFileSync(
           file,
           workflow.replaceAll(
-            'cancel-in-progress: true',
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}",
             "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}"
           )
         );

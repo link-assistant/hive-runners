@@ -2,16 +2,15 @@
 # Reports whether the repository's dependency graph is enabled, which
 # actions/dependency-review-action needs. Enabling it is a repository setting
 # that only an administrator can change, so pull requests skip the review
-# with a warning while pushes to main fail with instructions.
+# with a notice while pushes to main fail with instructions.
 #
-# Only a plain `403 Forbidden` from the dependency review API means the graph
-# is disabled. Rate limits, server errors and network failures are retried
-# and then reported as "unknown" instead of being mistaken for a disabled
-# graph.
+# A generic 403 can also mean the API token lacks access. Report the
+# comparison as unavailable unless GitHub explicitly identifies the setting.
+# Rate limits, server errors and network failures are retried.
 #
 # Usage: check-dependency-graph.sh <base-sha> <head-sha> [--require]
 # Needs GH_TOKEN and REPO; writes `enabled=true|false` and
-# `state=enabled|disabled|unknown` to GITHUB_OUTPUT.
+# `state=enabled|disabled|unavailable|unknown` to GITHUB_OUTPUT.
 # Optional: DEPENDENCY_GRAPH_ATTEMPTS (default 3),
 # DEPENDENCY_GRAPH_RETRY_SECONDS (default 10) and DEPENDENCY_GRAPH_DEBUG=1,
 # which prints every raw API answer.
@@ -27,7 +26,7 @@ debug() {
   if [ "${DEPENDENCY_GRAPH_DEBUG:-0}" = 1 ]; then echo "[debug] $*"; fi
 }
 
-# Prints enabled, disabled or retry for one answer of `gh api`.
+# Prints enabled, disabled, unavailable or retry for one answer of `gh api`.
 classify() {
   local status="$1" response="$2"
   if [ "$status" = 0 ]; then
@@ -35,7 +34,11 @@ classify() {
   elif printf '%s' "$response" | grep -qi 'rate limit'; then
     echo retry
   elif printf '%s' "$response" | grep -q '(HTTP 403)'; then
-    echo disabled
+    if printf '%s' "$response" | grep -qiE 'dependency graph.{0,30}(disabled|not enabled)'; then
+      echo disabled
+    else
+      echo unavailable
+    fi
   else
     echo retry
   fi
@@ -70,6 +73,10 @@ echo "GitHub answered: ${response:0:300}"
 if [ "$state" = disabled ]; then
   message="The dependency graph of $REPO is disabled, so dependency review cannot run. \
 A repository administrator has to enable \"Dependency graph\" at $SETTINGS."
+elif [ "$state" = unavailable ]; then
+  message="GitHub denied dependency comparison for $REPO without identifying the cause. \
+A repository administrator should verify that \"Dependency graph\" is enabled at $SETTINGS \
+and that the workflow token can read repository contents."
 else
   message="Could not tell whether the dependency graph of $REPO is enabled: \
 the GitHub API gave no definite answer after $ATTEMPTS attempts. Re-run the job; \
@@ -79,4 +86,6 @@ if [ "$MODE" = "--require" ]; then
   echo "::error::$message"
   exit 1
 fi
-echo "::warning::$message Skipping dependency review for this pull request."
+annotation=notice
+[ "$state" != unknown ] || annotation=warning
+echo "::${annotation}::$message Skipping dependency review for this pull request."

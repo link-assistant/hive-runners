@@ -77,7 +77,7 @@ describe('CI audit regressions', () => {
       job,
       /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/
     );
-    assert.match(job, /needs: \[web-build\]/);
+    assert.match(job, /needs: \[web-build, pages-check\]/);
     assert.match(
       job,
       /permissions:\n(?:\s+#[^\n]*\n)*\s+contents: read\n\s+pages: write\n\s+id-token: write\n\s+environment:/

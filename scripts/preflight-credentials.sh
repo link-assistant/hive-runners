@@ -14,8 +14,8 @@
 # PREFLIGHT_MODE:
 #   release -- push to main / manual instant release. A refused credential
 #              fails the run here, before the matrix spends a minute.
-#   report  -- pull requests, where a fork legitimately has no publishing
-#              secrets. The same probes run and annotate, but never block.
+#   report  -- advisory mode for a maintainer running the probe manually.
+#              Pull request workflows do not run this script.
 #
 # Rules each caller depends on (each is a defect if dropped):
 #   1. Report every failure, not the first -- no probe aborts the script.
@@ -91,7 +91,7 @@ explain_npm_exchange_404() {
   status="${status##*"$NEWLINE"}"
   case "$status" in
     404)
-      bad "npm has no package ${name} yet, and npm configures trusted publishing only for published packages. Add an NPM_TOKEN repository secret (a granular token allowed to publish ${name}) at ${secrets} for the first release, then add a trusted publisher for ${repo}, workflow release.yml, at ${access} and delete the secret"
+      bad "npm has no package ${name} yet, and npm configures trusted publishing only for published packages. Add an NPM_TOKEN repository secret (a granular token with publish access to ${name} and bypass 2FA enabled) at ${secrets} for the first release, then add a trusted publisher for ${repo}, workflow release.yml, at ${access} and delete the secret"
       ;;
     200)
       bad "npm rejected the OIDC exchange for ${name} (404): add a trusted publisher for ${repo}, workflow release.yml, at ${access}"
@@ -162,6 +162,10 @@ check_npm() {
   printf 'npm:\n'
   if [ -n "$oidc_url" ]; then
     check_npm_oidc "$oidc_url"
+    if [ "$verified" -gt 0 ]; then
+      printf '  SKIP: npm will use verified OIDC; a bootstrap token is not required\n'
+      return 0
+    fi
   elif [ -z "$token" ]; then
     unknown 'npm OIDC trusted publishing is not available (the job needs id-token: write)'
   fi
@@ -182,28 +186,14 @@ check_npm() {
 
   case "$status" in
     200)
-      login=$(printf '%s' "$payload" | node_read 'let d="";process.stdin.on("data",(c)=>{d+=c});process.stdin.on("end",()=>{try{process.stdout.write(String(JSON.parse(d).username||""))}catch{process.stdout.write("")}})')
+      login=$(printf '%s' "$payload" | json_string username)
       if [ -z "$login" ]; then
         unknown 'npm whoami response is malformed; token remains unverified'
         return 0
       fi
-      if node_read '
-          const fs = require("fs");
-          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-          const maintainers = (pkg.maintainers || [])
-            .map((entry) =>
-              typeof entry === "string"
-                ? entry.replace(/\s*<[^>]*>\s*$/, "").trim().toLowerCase()
-                : entry && String(entry.name || "").trim().toLowerCase()
-            )
-            .filter(Boolean);
-          const login = String(process.argv[1] || "").toLowerCase();
-          process.exit(maintainers.length === 0 || maintainers.includes(login) ? 0 : 1);
-        ' "$login"; then
-        ok "npm accepted NPM_TOKEN (logged in as ${login})"
-      else
-        bad "npm accepted NPM_TOKEN, but account '${login}' is not a maintainer of this package -- the publish would fail"
-      fi
+      # The package can be new and publish access may come through an npm
+      # organization. The local manifest cannot establish package grants.
+      ok 'npm accepted NPM_TOKEN for authentication; publish scope and 2FA bypass are checked by the first publish'
       ;;
     401)
       bad 'npm rejected NPM_TOKEN (401 Unauthorized) -- the token is missing, invalid or expired'

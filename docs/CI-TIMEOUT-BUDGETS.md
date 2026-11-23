@@ -7,9 +7,10 @@
 GitHub reports a job killed by `timeout-minutes` as **cancelled**, not
 **failed**. `scripts/check-pipeline-status.sh` turns an unexplained cancellation
 into an error. It excuses a cancellation only when the tested commit is no
-longer the branch head _and_ that specific job has a literal
-`cancel-in-progress: true`; `false`, inherited defaults, expressions, and
-unreadable workflow configuration all fail closed. Before this per-job check,
+longer the branch head _and_ the job can be cancelled by the workflow's
+concurrency policy. The gate recognizes the explicit PR synchronize
+condition and literal boolean values. Other expressions and unreadable
+workflow configuration fail closed. Before this per-job check,
 a moved pull request branch could make a genuine suite timeout look like a
 harmless superseded run. Even on `main`, the resulting error could not say which
 deadline was blown, because no step owned a deadline.
@@ -84,7 +85,8 @@ job's backstop fires.
   runners it can use passwordless `sudo` to reach privileged descendants and
   reports any process it still could not terminate.
 - Captures and relays stdout and stderr separately, so a surviving descendant
-  cannot inherit the CI step's pipe and hold the step open.
+  cannot inherit the CI step's pipe and hold the step open. Flushes a final
+  line even when the command exits without writing a trailing newline.
 - Keeps wrapper-owned state under `RUNNER_TEMP`, independently of a wrapped
   command that clears its own `TMPDIR`.
 - Exits **124** on termination, matching `timeout(1)`. Otherwise it passes the
@@ -106,7 +108,7 @@ back to signalling the direct child.
 - each individual budget is at most **70%** (`MAX_BUDGET_SHARE_PERCENT`) of the
   job's `timeout-minutes`, and
 - the budgets in a job sum to at most 70% of that cap, leaving headroom for the
-  unbudgeted setup — checkout, `npm ci`, the Bun install — that runs on the same
+  unbudgeted setup such as checkout and runtime initialization that runs on the same
   job clock.
 
 This invariant is what finds the _next_ occurrence rather than the one that
@@ -123,7 +125,7 @@ neither of which was involved in the original failure.
 | `docker-publish-config` | 45 min   | npm availability wait 1800s                      |
 | `docker-publish-build`  | 30 min   | image build and push 20 min                      |
 | `release`               | 65 min   | install 240s, npm publish 1800s, smoke test 600s |
-| `instant-release`       | 65 min   | npm publish 1800s, smoke test 600s               |
+| `instant-release`       | 65 min   | install 240s, npm publish 1800s, smoke test 600s |
 
 ## Reference
 
