@@ -87,21 +87,22 @@ The workflow implements several critical features from hive-mind issues #1274 an
 #### Concurrency Control
 
 ```yaml
-# Read-only job: newer work on the same ref supersedes stale work.
+# Read-only job: a PR synchronize event supersedes the previous synchronize.
 concurrency:
-  group: check-${{ github.workflow }}-${{ github.ref }}-lint
-  cancel-in-progress: true
+  group: check-${{ github.workflow }}-${{ github.ref }}-lint-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 # Write/deploy job: all repository writers use one protected queue.
 concurrency:
   group: main-writer-${{ github.repository }}-main
   cancel-in-progress: false
+  queue: max
 ```
 
 Concurrency is configured at job level rather than workflow level. This
 separation ensures:
 
-- **Read-only jobs**: New pushes cancel stale checks on both pull requests and `main`, reducing runner load.
+- **Read-only jobs**: New commits cancel superseded PR synchronize checks. Ready-for-review runs, dispatches, and each revision of `main` keep their own check slots.
 - **Dependent writers**: A cancelled prerequisite prevents its release or deploy job from starting.
 - **Active writers**: Release, Docker, Pages, changeset-PR, and generated-preview jobs all share one non-cancelling queue, so a newer workflow cannot interrupt a write already in progress.
 - **Matrix checks**: Runtime and operating-system values are part of the group, preserving parallel matrix execution while cancelling only the matching stale entry.
@@ -110,10 +111,8 @@ Do not apply cancellable concurrency at workflow level when a workflow contains
 write jobs: cancelling the workflow would also terminate a publisher that has
 already started. Likewise, do not use one shared group for every read-only job,
 because unrelated checks would cancel each other instead of running in
-parallel. GitHub Actions concurrency blocks support only `group` and
-`cancel-in-progress`; options such as `queue` are invalid. With
-`cancel-in-progress: false`, GitHub preserves the running job and manages one
-pending job for the group.
+parallel. `queue: max` retains up to 100 pending writer jobs. GitHub
+requires `cancel-in-progress: false` when that queue is used.
 
 See [DETAILED-COMPARISON.md](./case-studies/issue-25/DETAILED-COMPARISON.md) for the full analysis of best practices from both repositories.
 

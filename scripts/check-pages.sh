@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Check that GitHub Pages is enabled with GitHub Actions as its source, which
-# actions/configure-pages and actions/deploy-pages need on the default branch.
+# the Pages deploy job needs on the default branch.
 #
-# Pull requests never run the Pages steps, so without this check a disabled
-# site surfaces only after merge, as configure-pages' bare "Not Found".
 # The source is a repository setting only a maintainer can change, so:
-#   PAGES_MODE=warn    -- pull requests: annotate, write enabled=false and
-#                         exit 0 so the pull request is not blocked.
+#   PAGES_MODE=warn    -- report-only probe: annotate, write enabled=false
+#                         and exit 0.
 #   PAGES_MODE=require -- default branch: fail with the setting to change
 #                         until Pages is enabled with the GitHub Actions source.
 # The API answers 404 both for a disabled site and for a request it does not

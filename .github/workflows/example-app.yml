@@ -2,7 +2,7 @@ name: Example app
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'examples/universal-app/**'
       - 'src/**'
@@ -10,6 +10,7 @@ on:
       - 'package-lock.json'
       - 'scripts/update-preview-images.mjs'
       - 'scripts/setup-preview-gh.sh'
+      - 'scripts/run-with-budget-warning.sh'
       - 'scripts/check-preview-tools.sh'
       - 'scripts/push-main-with-rebase-retry.mjs'
       - 'scripts/push-failure-classifier.mjs'
@@ -21,6 +22,8 @@ on:
       - 'scripts/check-desktop-compat.mjs'
       - 'scripts/deploy-pages.mjs'
       - 'scripts/github-api.mjs'
+      - 'scripts/check-pipeline-status.sh'
+      - 'scripts/read-job-cancel-in-progress.sh'
       - '.github/workflows/example-app.yml'
       - '.github/actions/artifact-transport/**'
       - 'scripts/artifact-transport.mjs'
@@ -35,6 +38,7 @@ on:
       - 'package-lock.json'
       - 'scripts/update-preview-images.mjs'
       - 'scripts/setup-preview-gh.sh'
+      - 'scripts/run-with-budget-warning.sh'
       - 'scripts/check-preview-tools.sh'
       - 'scripts/push-main-with-rebase-retry.mjs'
       - 'scripts/push-failure-classifier.mjs'
@@ -46,6 +50,8 @@ on:
       - 'scripts/check-desktop-compat.mjs'
       - 'scripts/deploy-pages.mjs'
       - 'scripts/github-api.mjs'
+      - 'scripts/check-pipeline-status.sh'
+      - 'scripts/read-job-cancel-in-progress.sh'
       - '.github/workflows/example-app.yml'
       - '.github/actions/artifact-transport/**'
       - 'scripts/artifact-transport.mjs'
@@ -68,14 +74,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-web-build
-      cancel-in-progress: true
-    # check-pages.sh and configure-pages read the Pages API, which answers
-    # a request it does not authorise with the same 404 as a disabled site,
-    # so the read is granted explicitly.
-    permissions:
-      contents: read
-      pages: read
+      group: check-${{ github.workflow }}-${{ github.ref }}-web-build-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     # The deploy job publishes exactly the artifact this run uploaded.
     outputs:
       pages-artifact-id: ${{ steps.pages-artifact.outputs.artifact-id }}
@@ -91,27 +91,18 @@ jobs:
           cache: npm
           cache-dependency-path: examples/universal-app/package-lock.json
 
-      # Pull requests never deploy, so they only warn; main fails with the
-      # setting a maintainer has to change.
-      - name: Check GitHub Pages source
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          PAGES_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'require' || 'warn' }}
-        run: bash scripts/check-pages.sh
-
-      - name: Configure GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/configure-pages@v6
-
       - name: Install app dependencies
-        run: npm ci --prefix examples/universal-app --no-audit --no-fund
+        run: bash scripts/run-with-budget-warning.sh 240 "Example app dependency install" npm ci --prefix examples/universal-app --no-audit --no-fund
 
       - name: Build app
         run: npm run example:web:build
         env:
           GITHUB_PAGES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           VITE_REPOSITORY_URL: https://github.com/${{ github.repository }}
+
+      - name: Explain deferred draft checks
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft
+        run: echo "::notice::Linux desktop packaging runs when this pull request is ready for review."
 
       - name: Upload web build artifact
         uses: ./.github/actions/artifact-transport
@@ -129,12 +120,33 @@ jobs:
           pages: 'true'
           path: examples/universal-app/dist
 
-  # Requires Settings → Pages → Source = GitHub Actions to be set once
-  # in the repository before this job can succeed. See README → "Deploying
-  # the example app". The Pages source cannot be configured from a workflow.
+  # Check the repository setting separately so the web build still runs
+  # when a maintainer has to enable Pages.
+  pages-check:
+    name: GitHub Pages Prerequisite
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check GitHub Pages source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PAGES_MODE: require
+        run: bash scripts/check-pages.sh
+
+  # The deployment requires Settings → Pages → Source = GitHub Actions.
+  # The read-only prerequisite checks this setting before deployment starts.
   pages-deploy:
     name: Deploy GitHub Pages
-    needs: [web-build]
+    needs: [web-build, pages-check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -163,8 +175,8 @@ jobs:
       # The REST protocol of actions/deploy-pages@v5, which sends one
       # creation request and fails the job on a single transient HTTP 500.
       # The script retries 429/5xx/network failures of that request, adopts a
-      # deployment whose response was lost so one commit is never deployed
-      # twice, fails permanent 4xx at once and cancels what it abandons.
+      # deployment of the requested artifact whose response was lost, fails
+      # permanent 4xx at once and cancels what it abandons.
       - name: Deploy Pages artifact
         id: deployment
         env:
@@ -173,12 +185,13 @@ jobs:
         run: node --throw-deprecation scripts/deploy-pages.mjs
 
   desktop-package:
-    name: Package desktop app (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    name: Package desktop app
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-desktop-package-${{ matrix.os }}
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-desktop-package-${{ matrix.os }}-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     strategy:
       fail-fast: false
       matrix:
@@ -196,7 +209,7 @@ jobs:
           cache-dependency-path: examples/universal-app/package-lock.json
 
       - name: Install app dependencies
-        run: npm ci --prefix examples/universal-app --no-audit --no-fund
+        run: bash scripts/run-with-budget-warning.sh 240 "Example app dependency install" npm ci --prefix examples/universal-app --no-audit --no-fund
 
       - name: Verify desktop compatibility APIs
         run: node --pending-deprecation --throw-deprecation scripts/check-desktop-compat.mjs
@@ -232,8 +245,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-android-build
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-android-build-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -256,7 +269,7 @@ jobs:
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
       - name: Install app dependencies
-        run: npm ci --prefix examples/universal-app --no-audit --no-fund
+        run: bash scripts/run-with-budget-warning.sh 240 "Example app dependency install" npm ci --prefix examples/universal-app --no-audit --no-fund
 
       - name: Add Android project
         run: npm --prefix examples/universal-app run mobile:android:add
@@ -283,8 +296,8 @@ jobs:
       image: mcr.microsoft.com/playwright@sha256:b0ab6f3cb99aa7803adbc14d9027ec1785fc6e433b97e134e0f8fe61683b6b53 # v1.59.1-noble
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-preview-tools
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-preview-tools-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     permissions:
       contents: read
     defaults:
@@ -297,7 +310,7 @@ jobs:
       - name: Trust the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install pinned GitHub CLI
-        run: bash scripts/setup-preview-gh.sh
+        run: bash scripts/run-with-budget-warning.sh 120 "Pinned GitHub CLI setup" bash scripts/setup-preview-gh.sh
       - name: Check preview container tools
         run: bash scripts/check-preview-tools.sh
 
@@ -317,8 +330,8 @@ jobs:
       cancel-in-progress: false
       queue: max
     if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'workflow_dispatch'
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
     env:
@@ -343,20 +356,20 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install pinned GitHub CLI
-        run: bash scripts/setup-preview-gh.sh
+        run: bash scripts/run-with-budget-warning.sh 120 "Pinned GitHub CLI setup" bash scripts/setup-preview-gh.sh
 
       - name: Check preview container tools
         run: bash scripts/check-preview-tools.sh
 
       - name: Install example app dependencies
-        run: npm ci --prefix examples/universal-app --no-audit --no-fund
+        run: bash scripts/run-with-budget-warning.sh 240 "Example app dependency install" npm ci --prefix examples/universal-app --no-audit --no-fund
 
       # Deliberately installed outside the lockfile: these tools are only used
       # by this preview-image job and both versions are pinned exactly.
       - name: Install browser automation dependencies
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-        run: npm install --no-save --package-lock=false --no-audit --no-fund browser-commander@0.8.1 playwright@1.59.1 # zizmor: ignore[adhoc-packages]
+        run: bash scripts/run-with-budget-warning.sh 150 "Browser automation dependency install" npm install --no-save --package-lock=false --no-audit --no-fund browser-commander@0.8.1 playwright@1.59.1 # zizmor: ignore[adhoc-packages]
 
       - name: Regenerate preview images
         id: regenerate
@@ -458,8 +471,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     # A status function is required: without one the gate inherits the
     # implicit "every dependency succeeded" condition and is skipped in
     # exactly the runs it exists to report.
@@ -467,6 +480,7 @@ jobs:
       !cancelled()
     needs:
       - web-build
+      - pages-check
       - pages-deploy
       - desktop-package
       - android-build
@@ -490,6 +504,7 @@ jobs:
       - name: Fail the run when a required job was cancelled or failed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_EVENT_ACTION: ${{ github.event.action }}
           GH_TOKEN: ${{ github.token }}
           RUN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           HEAD_REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.number) || github.ref }}

@@ -122,16 +122,16 @@ describe('release-preflight workflow wiring', () => {
     }
   });
 
-  it('fails on main and manual instant releases, reports on pull requests', () => {
+  it('requires preflight on main pushes and instant releases on main', () => {
     const preflightBlock = getJobBlock(WORKFLOW, 'release-preflight');
 
-    expect(preflightBlock).toContain(
-      "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-    );
+    expect(preflightBlock).toContain("github.ref == 'refs/heads/main' &&");
     expect(preflightBlock).toContain(
       "github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant'"
     );
-    expect(preflightBlock).toContain("&& 'release' || 'report'");
+    expect(preflightBlock).toContain("github.event_name == 'push' ||");
+    expect(preflightBlock).toContain('PREFLIGHT_MODE: release');
+    expect(preflightBlock).not.toContain("github.event_name == 'pull_request'");
   });
 
   it('passes the publishing credentials to the probe', () => {
@@ -298,7 +298,7 @@ describe('release-preflight npm token diagnostics', () => {
   itUnless(sandboxed)(
     'fails in release mode when npm rejects the token',
     async () => {
-      const fixtures = makeFixtures({ whoamiStatus: 401 });
+      const fixtures = makeFixtures({ exchangeStatus: 404, whoamiStatus: 401 });
       const { code, stdout } = await runPreflight(
         {
           PREFLIGHT_MODE: 'release',
@@ -311,6 +311,26 @@ describe('release-preflight npm token diagnostics', () => {
       expect(code).toBe(1);
       expect(stdout).toContain('::error::');
       expect(stdout).toContain('npm rejected NPM_TOKEN (401 Unauthorized)');
+    }
+  );
+
+  itUnless(sandboxed)(
+    'prefers verified OIDC over an expired bootstrap token',
+    async () => {
+      const fixtures = makeFixtures({ whoamiStatus: 401 });
+      const { code, stdout } = await runPreflight(
+        {
+          PREFLIGHT_MODE: 'release',
+          ACTIONS_ID_TOKEN_REQUEST_URL: OIDC_URL,
+          NPM_TOKEN: 'stub-expired-token',
+        },
+        fixtures
+      );
+      expect(code).toBe(0);
+      expect(stdout).toContain('npm OIDC package exchange verified');
+      expect(readFileSync(join(fixtures, 'requests'), 'utf8')).not.toContain(
+        '/-/whoami'
+      );
     }
   );
 
@@ -415,6 +435,9 @@ describe('npm OIDC package exchange regression', () => {
       );
       expect(code).toBe(0);
       expect(stdout).toContain('bootstrap');
+      expect(stdout).toContain(
+        'publish scope and 2FA bypass are checked by the first publish'
+      );
       expect(stdout).not.toContain('npm OIDC package exchange verified');
     }
   );

@@ -26,12 +26,16 @@ function getWorkflowJob(workflow, jobName) {
 describe('pull-request Docker build check', () => {
   const dockerBuildJob = getWorkflowJob(releaseWorkflow, 'docker-build');
 
-  it('runs on pull requests with code changes', () => {
+  it('runs on ready pull requests with code changes', () => {
     expect(dockerBuildJob).not.toBe('');
     expect(dockerBuildJob).toContain('needs: [detect-changes]');
     expect(dockerBuildJob).toContain(
-      "if: github.event_name == 'pull_request' && needs.detect-changes.outputs.any-code-changed == 'true'"
+      "github.event_name == 'pull_request' && !github.event.pull_request.draft &&"
     );
+    expect(dockerBuildJob).toContain(
+      "needs.detect-changes.outputs.any-code-changed == 'true'"
+    );
+    expect(dockerBuildJob).toContain("vars.DOCKERFILE || './Dockerfile'");
     expect(dockerBuildJob).toContain('timeout-minutes:');
   });
 
@@ -119,7 +123,17 @@ describe('Docker build configuration', () => {
 
     expect(config.enabled).toBe(false);
     expect(config.errors).toEqual([
-      'Docker context does not exist: does-not-exist',
+      'Docker context is missing or is not a directory: does-not-exist',
     ]);
   });
+});
+
+it('fails the build check for an explicitly configured missing Dockerfile', () => {
+  const config = evaluateDockerBuildConfig({
+    env: { DOCKERFILE: 'missing.Dockerfile' },
+  });
+  expect(config.enabled).toBe(false);
+  expect(config.errors).toEqual([
+    'Dockerfile is missing or is not a regular file: missing.Dockerfile',
+  ]);
 });

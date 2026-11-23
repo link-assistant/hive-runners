@@ -13,7 +13,7 @@
  * - DOCKER_CONTEXT: build context path (optional, defaults to .)
  */
 
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,24 +29,27 @@ export function evaluateDockerBuildConfig({
   env = process.env,
 } = {}) {
   const context = clean(env.DOCKER_CONTEXT) || DEFAULT_CONTEXT;
-  const dockerfile = clean(env.DOCKERFILE) || DEFAULT_DOCKERFILE;
+  const configuredDockerfile = clean(env.DOCKERFILE);
+  const dockerfile = configuredDockerfile || DEFAULT_DOCKERFILE;
   const errors = [];
 
-  const dockerfileExists = existsSync(path.resolve(cwd, dockerfile));
-  const contextExists = existsSync(path.resolve(cwd, context));
-
-  // Repositories without a Dockerfile skip the check; this is not an error.
-  if (!dockerfileExists) {
-    return {
-      context,
-      dockerfile,
-      enabled: false,
-      errors,
-    };
+  const recipe = statSync(path.resolve(cwd, dockerfile), {
+    throwIfNoEntry: false,
+  });
+  if (recipe?.isFile() !== true) {
+    if (recipe || configuredDockerfile) {
+      errors.push(
+        `Dockerfile is missing or is not a regular file: ${dockerfile}`
+      );
+    }
+    return { context, dockerfile, enabled: false, errors };
   }
 
-  if (!contextExists) {
-    errors.push(`Docker context does not exist: ${context}`);
+  const buildContext = statSync(path.resolve(cwd, context), {
+    throwIfNoEntry: false,
+  });
+  if (buildContext?.isDirectory() !== true) {
+    errors.push(`Docker context is missing or is not a directory: ${context}`);
   }
 
   return {

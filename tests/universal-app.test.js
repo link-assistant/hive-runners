@@ -85,7 +85,7 @@ describe('universal React example app', () => {
     );
     expect(workflow).toContain('npm run example:web:build');
     expect(workflow).toContain('npm run example:desktop:package');
-    expect(workflow).toContain('actions/configure-pages@v6');
+    expect(workflow).toContain('needs: [web-build, pages-check]');
     expect(workflow).toContain('./.github/actions/artifact-transport');
     expect(workflow).toContain('scripts/deploy-pages.mjs');
     expect(workflow).toContain('EXAMPLE_APP_ENABLE_ANDROID_BUILD');

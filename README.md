@@ -121,6 +121,10 @@ library package itself.
 See [examples/universal-app/README.md](examples/universal-app/README.md) for
 local web, desktop, Android, and iOS testing instructions.
 
+The web build runs independently of deployment. To enable deployment from
+`main`, open the repository's **Settings → Pages** and set **Build and
+deployment → Source** to **GitHub Actions**.
+
 ### Code Quality
 
 - **ESLint**: Configured with recommended rules + Prettier integration
@@ -135,7 +139,7 @@ The release workflow uses [Changesets](https://github.com/changesets/changesets)
 1. **Creating a changeset**: Run `bun run changeset` to document changes
 2. **PR validation**: CI checks for valid changeset in each PR
 3. **Automated versioning**: Merging to `main` triggers version bump
-4. **npm publishing**: Automated via OIDC trusted publishing (no tokens needed)
+4. **npm publishing**: Automated via OIDC trusted publishing once the first package version exists
 5. **Optional Docker Hub publishing**: When configured, waits for the exact npm version and tags the Docker image with that version
 6. **GitHub releases**: Auto-created with formatted release notes
 
@@ -143,17 +147,19 @@ The release workflow uses [Changesets](https://github.com/changesets/changesets)
 > create a package that does not exist yet (the first publish fails with
 > `E404`, because a trusted publisher can only be configured for an existing
 > package). To bootstrap, add a repository secret named `NPM_TOKEN` (a
-> granular/automation token with publish access). The release workflow passes
+> granular token with package publish access and bypass 2FA enabled). The release workflow passes
 > it as `NODE_AUTH_TOKEN` automatically. Once the package exists and OIDC
 > trusted publishing is configured on npmjs.com, the token becomes optional and
 > can be removed.
 
 #### Manual Releases
 
-Two manual release modes are available via GitHub Actions:
+Two manual release modes are available via GitHub Actions on `main`:
 
 - **Instant release**: Immediately bump version and publish
 - **Changeset PR**: Create a PR with changeset for review
+
+Selecting another branch fails the run with instructions before release checks begin.
 
 ### CI/CD Pipeline
 
@@ -161,7 +167,7 @@ The GitHub Actions workflow (`.github/workflows/release.yml`) implements a fast-
 
 **Fast checks** (~7-30s each, run first for fastest feedback):
 
-1. **Test compilation**: Syntax-checks all `.mjs` files with `node --check`
+1. **Test compilation**: Syntax-checks the tracked JavaScript files with `node --check`
 2. **Lint, format & secrets scan**: ESLint, Prettier, jscpd, and [secretlint](https://github.com/secretlint/secretlint) for credential leak detection
 3. **File line limits**: Enforces the 1500-line limit on JavaScript (`.js`, `.mjs`, `.cjs`) and Markdown (`.md`) files plus `release.yml`
 4. **Changeset check**: Validates PR has exactly one changeset (added by that PR)
@@ -170,8 +176,20 @@ The GitHub Actions workflow (`.github/workflows/release.yml`) implements a fast-
 
 **Slow checks** (only run after all fast checks pass):
 
-7. **Test matrix**: 3 runtimes × 3 OS = 9 test combinations
+7. **Test matrix**: Node.js, Bun, and Deno on Ubuntu
 8. **Broken link checks**: Validates all links in Markdown/HTML files (separate workflow)
+
+Draft pull requests run the web build and standard code checks. When a pull
+request is ready for review, CI also validates the Docker image and Linux
+desktop package on relevant changes. A new commit to a ready pull request
+runs the applicable full checks for that revision.
+
+The Security workflow runs CodeQL, npm audit, and live npm deprecation checks.
+For dependency review, a repository administrator must enable **Dependency
+graph** under **Settings → Advanced Security** and allow the workflow token to
+read repository contents. An unavailable graph leaves an annotation on pull
+requests while other scans run. The default-branch graph check fails with
+setup instructions.
 
 **Release** (on merge to main):
 
@@ -183,7 +201,7 @@ The GitHub Actions workflow (`.github/workflows/release.yml`) implements a fast-
 
 Every CI job declares an explicit `timeout-minutes` so hung steps fail
 in minutes instead of reaching the GitHub Actions default of six hours.
-Fast checks use 5-10 minute caps, release jobs use 50 minutes, and the
+Fast checks use 5-10 minute caps, npm release jobs use 65 minutes, and the
 link checker uses 10 minutes for external network variance.
 
 That cap is a backstop, never the deadline: GitHub reports a job it

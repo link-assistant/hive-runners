@@ -105,23 +105,26 @@ describe('check-pages.sh', () => {
     }
   });
 
-  it('runs before configure-pages with an explicit Pages read grant', () => {
-    // Windows checkouts can have CRLF line endings.
+  it('checks Pages only on main and keeps the web build independent', () => {
     const workflow = readFileSync(
       '.github/workflows/example-app.yml',
       'utf8'
     ).replaceAll('\r\n', '\n');
-    const job = workflow
+    const [build, prerequisite] = workflow
       .split('\n  web-build:')[1]
-      .split('\n  pages-deploy:')[0];
+      .split('\n  pages-deploy:')[0]
+      .split('\n  pages-check:');
 
-    expect(job).toMatch(/permissions:\n\s+contents: read\n\s+pages: read/);
-    expect(job.indexOf('scripts/check-pages.sh')).toBeGreaterThan(0);
-    expect(job.indexOf('scripts/check-pages.sh')).toBeLessThan(
-      job.indexOf('actions/configure-pages')
+    expect(build).not.toContain('check-pages.sh');
+    expect(build).toContain('npm run example:web:build');
+    expect(prerequisite).toContain(
+      "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
     );
-    expect(job).toContain(
-      "PAGES_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'require' || 'warn' }}"
+    expect(prerequisite).toMatch(
+      /permissions:\n\s+contents: read\n\s+pages: read/
     );
+    expect(prerequisite).toContain('PAGES_MODE: require');
+    expect(prerequisite).toContain('scripts/check-pages.sh');
+    expect(workflow).toContain('needs: [web-build, pages-check]');
   });
 });

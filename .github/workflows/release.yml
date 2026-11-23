@@ -5,7 +5,7 @@ on:
     branches:
       - main
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   # Manual release support - consolidated here to work with npm trusted publishing
   # npm only allows ONE workflow file as trusted publisher, so all publishing
   # must go through this workflow (release.yml)
@@ -53,16 +53,9 @@ jobs:
     # Typical run: ~6s. Cap at 5min so a hung detection step
     # surfaces quickly instead of stalling the whole pipeline.
     timeout-minutes: 5
-    # Job-level permissions replace the workflow defaults for this job.
-    permissions:
-      contents: read
-      # The detector asks the Actions API whether the previous head of the
-      # branch already passed this workflow, so a docs-only push can trust
-      # its incremental range.
-      actions: read
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-detect-changes
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-detect-changes-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     if: github.event_name != 'workflow_dispatch'
     outputs:
       js-changed: ${{ steps.changes.outputs.js-changed }}
@@ -77,12 +70,12 @@ jobs:
       - name: Detect changes
         id: changes
         env:
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_BEFORE_SHA: ${{ github.event.before }}
-          GITHUB_AFTER_SHA: ${{ github.event.after }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: node scripts/detect-code-changes.mjs
+
+      - name: Explain deferred draft checks
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft && steps.changes.outputs.any-code-changed == 'true'
+        run: echo "::notice::The Docker image build runs when this pull request is ready for review."
 
   # === FAST CHECKS - run before slow tests for fastest feedback ===
   # See: hive-mind CI/CD best practices principle #5 (fast-fail job ordering)
@@ -94,8 +87,8 @@ jobs:
     # Typical run: <10s. Tight cap fails fast on syntax-check hangs.
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-test-compilation
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-test-compilation-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     needs: [detect-changes]
     if: |
       !cancelled() &&
@@ -120,8 +113,8 @@ jobs:
     # Typical run: <10s. This job only walks tracked files and counts lines.
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-check-file-line-limits
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-check-file-line-limits-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     needs: [detect-changes]
     if: |
       !cancelled() &&
@@ -154,8 +147,8 @@ jobs:
     # Typical run: ~6s. Read-only package.json diff inspection.
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-version-check
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-version-check-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -167,7 +160,6 @@ jobs:
         env:
           GITHUB_HEAD_REF: ${{ github.head_ref }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RELEASE_PR_ACTOR: ${{ vars.RELEASE_PR_ACTOR }}
         run: node scripts/check-version.mjs
@@ -180,10 +172,12 @@ jobs:
     # Typical run: <30s including npm ci. 10min covers cold runners.
     timeout-minutes: 10
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-changeset-check
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-changeset-check-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     needs: [detect-changes]
-    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.any-code-changed == 'true'
+    if: >-
+      github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+      needs.detect-changes.outputs.any-code-changed == 'true'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -196,13 +190,12 @@ jobs:
           node-version: '24.x'
 
       - name: Install dependencies
-        run: npm ci
+        run: bash scripts/run-with-budget-warning.sh 210 "Project dependency install" npm ci
 
       - name: Check for changesets
         env:
           # Pass PR context to the validation script
           GITHUB_BASE_REF: ${{ github.base_ref }}
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_HEAD_REF: ${{ github.head_ref }}
           GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RELEASE_PR_ACTOR: ${{ vars.RELEASE_PR_ACTOR }}
@@ -225,8 +218,8 @@ jobs:
     # and secretlint. 10min protects against a hung lint plugin.
     timeout-minutes: 10
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-lint
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-lint-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     needs: [detect-changes]
     if: |
       !cancelled() &&
@@ -236,6 +229,12 @@ jobs:
         needs.detect-changes.outputs.any-code-changed == 'true'
       )
     steps:
+      - name: Require main for manual releases
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Select main in the Actions branch picker to run a manual release."
+          exit 1
+
       - uses: actions/checkout@v7
         with:
           # For PRs, fetch enough history to merge with base branch
@@ -254,10 +253,10 @@ jobs:
           node-version: '24.x'
 
       - name: Check for secrets
-        run: npx --yes -p secretlint@13.0.7 -p @secretlint/secretlint-rule-preset-recommend@13.0.7 node scripts/check-secrets.mjs
+        run: bash scripts/run-with-budget-warning.sh 150 "Secretlint scan" npx --yes -p secretlint@14.0.0 node scripts/check-secrets.mjs
 
       - name: Install dependencies
-        run: npm ci
+        run: bash scripts/run-with-budget-warning.sh 210 "Project dependency install" npm ci
 
       # Exercise versioning without credentials, even if release-preflight fails.
       # Restore consumed changesets and metadata on success or failure so lint
@@ -300,8 +299,8 @@ jobs:
     # which hides the failure -- see docs/CI-TIMEOUT-BUDGETS.md.
     timeout-minutes: 15
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-test-${{ matrix.runtime }}-${{ matrix.os }}
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-test-${{ matrix.runtime }}-${{ matrix.os }}-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     needs:
       [
         detect-changes,
@@ -356,10 +355,10 @@ jobs:
           node-version: '24.x'
 
       - name: Install dependencies (runtime tests and native fixtures)
-        run: npm ci
+        run: bash scripts/run-with-budget-warning.sh 210 "Project dependency install" npm ci
 
       - name: Install native CI adapter dependencies
-        run: npm ci --prefix .github/actions/artifact-transport --ignore-scripts --no-audit --no-fund
+        run: bash scripts/run-with-budget-warning.sh 100 "Artifact SDK install" npm ci --prefix .github/actions/artifact-transport --ignore-scripts --no-audit --no-fund
 
       - name: Run tests (Node.js)
         if: matrix.runtime == 'node'
@@ -393,7 +392,8 @@ jobs:
       # so the 100s suite budget below still measures every acceptance test.
       - name: Prepare Deno test dependencies
         if: matrix.runtime == 'deno'
-        run: deno test -A --parallel --no-run --frozen
+        shell: bash
+        run: bash scripts/run-with-budget-warning.sh 180 "Deno dependency preparation" deno test -A --parallel --no-run --frozen
 
       - name: Run tests (Deno)
         if: matrix.runtime == 'deno'
@@ -412,15 +412,17 @@ jobs:
     # a cold, uncached build without allowing a 6h hang.
     timeout-minutes: 30
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-docker-build
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-docker-build-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     needs: [detect-changes]
-    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.any-code-changed == 'true'
+    if: >-
+      github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+      needs.detect-changes.outputs.any-code-changed == 'true'
     permissions:
       contents: read
     env:
       DOCKER_CONTEXT: ${{ vars.DOCKER_CONTEXT }}
-      DOCKERFILE: ${{ vars.DOCKERFILE }}
+      DOCKERFILE: ${{ vars.DOCKERFILE || './Dockerfile' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -460,8 +462,8 @@ jobs:
     # Typical run: <10s. Pure shell checks over documentation files.
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-validate-docs
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-validate-docs-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     needs: [detect-changes]
     if: |
       needs.detect-changes.outputs.docs-changed == 'true'
@@ -489,6 +491,11 @@ jobs:
   # attempted write: a refused credential fails the run seconds in instead
   # of surfacing as a registry error after the matrix.
   release-preflight:
+    # A pull request executes its own code and has no need for publish credentials.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant'))
     name: Release Preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -506,17 +513,7 @@ jobs:
 
       - name: Probe every release credential
         env:
-          # Release mode (push to main, manual instant release) fails the run
-          # on a refused credential. Report mode (pull requests -- a fork has
-          # no publishing secrets) runs the same probes and annotates without
-          # blocking.
-          PREFLIGHT_MODE: >-
-            ${{
-              (
-                (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-                (github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant')
-              ) && 'release' || 'report'
-            }}
+          PREFLIGHT_MODE: release
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
@@ -599,7 +596,7 @@ jobs:
         run: bash scripts/run-with-budget-warning.sh 240 "Release dependency install" npm ci
 
       - name: Update npm for OIDC trusted publishing
-        run: node scripts/setup-npm.mjs
+        run: bash scripts/run-with-budget-warning.sh 80 "npm publishing tool setup" node scripts/setup-npm.mjs
 
       - name: Check for changesets
         id: check_changesets
@@ -693,6 +690,7 @@ jobs:
     if: |
       !cancelled() &&
       github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
       github.event.inputs.release_mode == 'instant' &&
       needs.release-preflight.result == 'success' &&
       needs.lint.result == 'success' &&
@@ -736,10 +734,10 @@ jobs:
         run: node scripts/sanitize-npm-userconfig.mjs
 
       - name: Install dependencies
-        run: npm ci
+        run: bash scripts/run-with-budget-warning.sh 240 "Release dependency install" npm ci
 
       - name: Update npm for OIDC trusted publishing
-        run: node scripts/setup-npm.mjs
+        run: bash scripts/run-with-budget-warning.sh 80 "npm publishing tool setup" node scripts/setup-npm.mjs
 
       - name: Version packages and commit to main
         id: version
@@ -972,6 +970,7 @@ jobs:
     if: |
       !cancelled() &&
       github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
       github.event.inputs.release_mode == 'changeset-pr' &&
       needs.lint.result == 'success'
     runs-on: ubuntu-24.04
@@ -1006,7 +1005,7 @@ jobs:
           node-version: '24.x'
 
       - name: Install dependencies
-        run: npm ci
+        run: bash scripts/run-with-budget-warning.sh 210 "Project dependency install" npm ci
 
       - name: Create changeset file
         env:
@@ -1017,7 +1016,7 @@ jobs:
       - name: Format changeset with Prettier
         run: |
           # Run Prettier on the changeset file to ensure it matches project style
-          npx prettier --write ".changeset/*.md"
+          npm exec --offline -- prettier --write ".changeset/*.md"
 
           echo "Formatted changeset files"
 
@@ -1055,8 +1054,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     if: >-
       !cancelled()
     needs:
@@ -1094,6 +1093,7 @@ jobs:
       - name: Fail the run when a required job was cancelled or failed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_EVENT_ACTION: ${{ github.event.action }}
           GH_TOKEN: ${{ github.token }}
           RUN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           HEAD_REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.number) || github.ref }}

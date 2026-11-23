@@ -51,14 +51,14 @@ exit 1
 }
 describe('dependency graph prerequisite', () => {
   itShell(
-    'allows enabled graphs and warns on a plain disabled response in PRs',
+    'allows enabled graphs and adds a notice on an explicit disabled response in PRs',
     () => {
       expect(probe('enabled').output).toContain('state=enabled');
-      const result = probe('gh: Forbidden (HTTP 403)');
+      const result = probe('gh: Dependency graph is disabled (HTTP 403)');
       expect(result.status).toBe(0);
       expect(result.calls).toBe(1);
       expect(result.output).toContain('enabled=false\nstate=disabled');
-      expect(result.stdout).toContain('::warning::');
+      expect(result.stdout).toContain('::notice::');
       expect(result.stdout).toContain(
         'https://github.com/owner/repo/settings/security_analysis'
       );
@@ -68,6 +68,14 @@ describe('dependency graph prerequisite', () => {
     const result = probe('gh: Forbidden (HTTP 403)', '--require');
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('::error::');
+    expect(result.output).toContain('state=unavailable');
+    expect(result.stdout).toContain(
+      'verify that "Dependency graph" is enabled'
+    );
+    expect(result.stdout).not.toContain('is disabled');
+    expect(
+      probe('gh: Resource not accessible by integration (HTTP 403)').output
+    ).toContain('state=unavailable');
   });
   itShell(
     'retries ambiguous answers without diagnosing a disabled graph',

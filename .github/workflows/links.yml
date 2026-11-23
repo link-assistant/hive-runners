@@ -15,6 +15,7 @@ on:
       - 'scripts/check-web-archive.mjs'
       - 'scripts/lychee-report.mjs'
       - 'scripts/install-lychee.sh'
+      - 'scripts/run-with-budget-warning.sh'
       - 'tests/lychee-install.test.js'
       - 'tests/lychee-step.test.js'
       - 'scripts/recheck-broken-links.mjs'
@@ -22,7 +23,7 @@ on:
       - 'tests/links-workflow.test.js'
       - 'tests/recheck-broken-links.test.js'
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '**.md'
       - '**.html'
@@ -34,6 +35,7 @@ on:
       - 'scripts/check-web-archive.mjs'
       - 'scripts/lychee-report.mjs'
       - 'scripts/install-lychee.sh'
+      - 'scripts/run-with-budget-warning.sh'
       - 'tests/lychee-install.test.js'
       - 'tests/lychee-step.test.js'
       - 'scripts/recheck-broken-links.mjs'
@@ -65,8 +67,8 @@ jobs:
     # external hosts or Wayback Machine probes from hanging the workflow.
     timeout-minutes: 10
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-link-checker
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-link-checker-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     permissions:
       contents: read
     steps:
@@ -90,7 +92,7 @@ jobs:
           restore-keys: cache-lychee-${{ runner.os }}-${{ steps.link-cache.outputs.day }}-
 
       - name: Install pinned lychee with download retries
-        run: bash scripts/install-lychee.sh
+        run: bash scripts/run-with-budget-warning.sh 180 "Lychee install" bash scripts/install-lychee.sh
         env:
           LYCHEE_VERSION: v0.24.2
           LYCHEE_SHA256_X86_64: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
@@ -204,8 +206,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status
-      cancel-in-progress: true
+      group: check-${{ github.workflow }}-${{ github.ref }}-pipeline-status-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     # A status function is required: without one the gate inherits the
     # implicit "every dependency succeeded" condition and is skipped in
     # exactly the runs it exists to report.
@@ -231,6 +233,7 @@ jobs:
       - name: Fail the run when a required job was cancelled or failed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_EVENT_ACTION: ${{ github.event.action }}
           GH_TOKEN: ${{ github.token }}
           RUN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           HEAD_REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.number) || github.ref }}

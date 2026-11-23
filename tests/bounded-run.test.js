@@ -9,17 +9,28 @@ import {
 } from './helpers/bounded-run.js';
 import { itUnless, sandboxed } from './helpers/skip.js';
 
-function isAlive(pid) {
+function isAlive(
+  pid,
+  {
+    platform = process.platform,
+    kill = process.kill,
+    readStat = readFileSync,
+  } = {}
+) {
+  if (platform === 'linux') {
+    try {
+      // A killed orphan can remain a zombie until its new parent reaps it.
+      const stat = readStat(`/proc/${pid}/stat`, 'utf8');
+      return stat[stat.lastIndexOf(') ') + 2] !== 'Z';
+    } catch {
+      // Probe after the read if the process disappeared or procfs is unavailable.
+    }
+  }
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
+    return true;
   } catch (error) {
     return error.code === 'EPERM';
-  }
-  // A killed orphan stays a zombie until init reaps it; some containers never do.
-  try {
-    return readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1][0] !== 'Z';
-  } catch {
-    return true;
   }
 }
 
@@ -64,6 +75,24 @@ describe('killTree', () => {
       () => killTree(42, { platform: 'linux', kill: failWith('EPERM') }),
       /EPERM/
     );
+  });
+});
+
+describe('process liveness', () => {
+  it('recognizes a process reaped while checking its Linux status', () => {
+    let reaped = false;
+    const readStat = () => {
+      reaped = true;
+      throw Object.assign(new Error('process stat disappeared'), {
+        code: 'ENOENT',
+      });
+    };
+    const kill = () => {
+      if (reaped) {
+        throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+      }
+    };
+    assert.equal(isAlive(42, { platform: 'linux', kill, readStat }), false);
   });
 });
 
@@ -114,10 +143,12 @@ describe('runBounded', () => {
       const pid = Number(/grandchild (\d+)/.exec(failure.stdout)?.[1]);
       assert.ok(pid > 0, `no grandchild pid in ${failure.stdout}`);
       // taskkill returns before Windows finishes tearing processes down.
-      for (let attempt = 0; attempt < 50 && isAlive(pid); attempt++) {
+      let grandchildRunning = isAlive(pid);
+      for (let attempt = 0; attempt < 50 && grandchildRunning; attempt++) {
         await new Promise((done) => setTimeout(done, 100));
+        grandchildRunning = isAlive(pid);
       }
-      expect(isAlive(pid)).toBe(false);
+      expect(grandchildRunning).toBe(false);
     }
   );
 
