@@ -159,6 +159,8 @@ Two manual release modes are available via GitHub Actions on `main`:
 - **Instant release**: Immediately bump version and publish
 - **Changeset PR**: Create a PR with changeset for review
 
+Selecting another branch fails the run with instructions before release checks begin.
+
 ### CI/CD Pipeline
 
 The GitHub Actions workflow (`.github/workflows/release.yml`) implements a fast-fail pipeline:

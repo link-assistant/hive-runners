@@ -19,6 +19,7 @@ tar -xOzf baseline-evidence.tar.gz ci-logs/44769889390-attempt-1.log | sed -n '1
 | 2026-11-23 10:01:11 | Issue #3 opened with the seven runs. |
 | 2026-11-23 10:02:01 | Draft PR #4 opened at `46d2d58f6a3c64b05b27f17ec483573bb21e22dc`. The initial Security and release runs passed, but the release workflow skipped tests, lint, and compilation on the placeholder-only diff. |
 | 2026-11-23 | Refreshed API responses still showed Pages unavailable (404 and `has_pages: false`), a generic HTTP 403 from dependency comparison, and an unpublished npm package (E404 and no repository `NPM_TOKEN`). The matching template defects were reported upstream. |
+| 2026-11-23 10:27–10:45 | GitHub completed all 11 runs on `29d420405ef8dd9fd06bdc09b7d03f9a4ab4a5cd` successfully. The ready-for-review event exercised the Docker image, Linux desktop package, and all three runtimes. |
 
 ## Root causes, options, and verification
 
@@ -49,7 +50,7 @@ tar -xOzf baseline-evidence.tar.gz ci-logs/44769889390-attempt-1.log | sed -n '1
 | `scripts/`, `.husky/` | 73 scripts and the one Husky hook matched. Four shared scripts differed. The two new template scripts were adopted and changed-file lint superseded the local changed-line implementation. Shared scripts also gained prerequisite, change-detection, Docker, and cancellation handling. |
 | Root configuration, lockfiles, Changesets, tests and docs | Keep the Hive Runners package identity, runtime and distribution, dependency pins, lockfiles and release history. The template's release changes are represented by a local patch changeset. The existing format, generated documentation, line limit, documentation links, and status policies still run. |
 | Product examples, Docker, Helm and monitoring | Preserve the runner fleet, Linux CI and packaging, native Docker architectures, and product-specific deployment files. The template's macOS-hosted iOS job is outside the supported CI matrix. Local iOS and opt-in Android instructions and checks remain. |
-| Rust template and example | Keep the existing, isolated JavaScript-first Rust reference and its fixture CI. This package has no production Rust opt-in or native implementation to gate. |
+| Rust template and example | Preserve the isolated JavaScript-first Rust reference, all readiness assertions, and its six jobs. The fixture jobs now preserve ready and main runs under the shared cancellation policy. This package has no production Rust opt-in or native implementation to gate. |
 
 The upstream template addressed npm and artifact warnings, whole-file lint, and time budgets in [PR #309](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/pull/309). [PR #311](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/pull/311) tightened Pages deployment artifact identity. Four additional reports contain reproductions, workarounds, and patch suggestions:
 
@@ -72,6 +73,14 @@ This comparison uses the 17 recommendations in the [pinned guide](https://github
 | 13 and 14 | Existing Docker publishing builds amd64 and arm64 on native runners. Actionlint, ShellCheck, Zizmor and terminal status coverage stay in the meta-workflow. |
 | 15 and 16 | Keep GitHub graph review, CodeQL, npm advisories, live deprecation checks, and trusted release preflight with actionable configuration errors. |
 | 17 | Keep the unacquired-runner controller, record original and rerun evidence, and use bounded transport retries and quiet-by-default tracing. |
+
+## First candidate verification
+
+[candidate-29d4204-evidence.tar.gz](candidate-29d4204-evidence.tar.gz) contains completed run logs, attempt and job metadata, artifact indexes, local test results, and read-only production prerequisite probes for the first candidate. Its ready release run verified Changesets, names and versions, lint, compilation, Docker, documentation, and the Node, Bun, and Deno suites. The Example app packaged the Linux desktop artifact. CodeQL and all three npm lock scans passed. GitHub omitted dependency review because the prerequisite reported the same 403 as the baseline. [Release run 45156584663](https://github.com/link-assistant/hive-runners/actions/runs/45156584663), [Example app run 45156584386](https://github.com/link-assistant/hive-runners/actions/runs/45156584386), [Security run 45156584400](https://github.com/link-assistant/hive-runners/actions/runs/45156584400)
+
+A GraphQL probe with the same authenticated CLI actor returned no dependency manifests for Hive Runners and five for the dependency-review action control repository. This supports investigating graph enablement or population first. The comparison endpoint still does not disclose its cause. The local Pages and graph scripts in required mode each exited 1 with setup instructions against the live APIs.
+
+A follow-up review found that an off-main manual release could skip both publishing paths while the workflow reported success. The first lint step now rejects that dispatch with instructions, before any checkout. The workflow reliability test also verifies that both manual writers depend on successful lint and explicitly require main.
 
 ## Production verification
 

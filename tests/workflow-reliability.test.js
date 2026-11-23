@@ -204,12 +204,8 @@ describe('workflow concurrency policy', () => {
           }
           const group = policy.group.replaceAll('${{ github.ref }}', ref);
           if (group.startsWith('check-')) {
-            if (file.endsWith('/javascript-first-example.yml')) {
-              expect(policy['cancel-in-progress']).toBe(true);
-            } else {
-              expect(policy['cancel-in-progress']).toBe(SYNC_ONLY);
-              expect(group.endsWith(RUN_GROUP)).toBe(true);
-            }
+            expect(policy['cancel-in-progress']).toBe(SYNC_ONLY);
+            expect(group.endsWith(RUN_GROUP)).toBe(true);
             for (const dimension of Object.keys(job.strategy?.matrix || {})) {
               if (['include', 'exclude'].includes(dimension)) {
                 continue;
@@ -344,6 +340,23 @@ describe('workflow concurrency policy', () => {
 });
 
 describe('workflow reliability policy', () => {
+  it('rejects manual releases from other branches before checkout', () => {
+    const workflow = parse(readWorkflow('.github/workflows/release.yml'));
+    const { jobs } = workflow;
+    const guard = jobs.lint.steps[0];
+
+    expect(guard.if).toBe(
+      "github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'"
+    );
+    expect(guard.run).toContain('::error::Select main');
+    expect(guard.run.trim().endsWith('exit 1')).toBe(true);
+    for (const job of ['instant-release', 'changeset-pr']) {
+      expect(jobs[job].needs).toContain('lint');
+      expect(jobs[job].if).toContain("needs.lint.result == 'success'");
+      expect(jobs[job].if).toContain("github.ref == 'refs/heads/main'");
+    }
+  });
+
   it('sets Git default branch config before checkout initializes repositories', () => {
     const workflowPaths = [
       '.github/workflows/example-app.yml',

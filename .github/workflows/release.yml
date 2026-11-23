@@ -229,6 +229,12 @@ jobs:
         needs.detect-changes.outputs.any-code-changed == 'true'
       )
     steps:
+      - name: Require main for manual releases
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Select main in the Actions branch picker to run a manual release."
+          exit 1
+
       - uses: actions/checkout@v7
         with:
           # For PRs, fetch enough history to merge with base branch

@@ -142,9 +142,8 @@ jobs:
           PAGES_MODE: require
         run: bash scripts/check-pages.sh
 
-  # Requires Settings → Pages → Source = GitHub Actions to be set once
-  # in the repository before this job can succeed. See README → "Deploying
-  # the example app". The Pages source cannot be configured from a workflow.
+  # The deployment requires Settings → Pages → Source = GitHub Actions.
+  # The read-only prerequisite checks this setting before deployment starts.
   pages-deploy:
     name: Deploy GitHub Pages
     needs: [web-build, pages-check]
