@@ -147,6 +147,54 @@ Start the fleet reconciler, landing page, and optional customer portal.
 hive-runners serve [--config FILE]
 ```
 
+## local-probe
+
+Read physical host or Docker VM measurements and filesystem identities.
+
+```text
+hive-runners local-probe (--storage DIR | --docker-context NAME --monitor-image IMAGE)
+```
+
+## local-start
+
+Run one local private-worker controller in the foreground.
+
+```text
+hive-runners local-start [--config FILE] [--state DIRECTORY] [--once]
+```
+
+## local-status
+
+Show desired mode, active leases and the latest admission errors.
+
+```text
+hive-runners local-status [--state DIRECTORY]
+```
+
+## local-drain
+
+Pause new admissions and let admitted workers finish.
+
+```text
+hive-runners local-drain [--state DIRECTORY]
+```
+
+## local-resume
+
+Allow the local controller to admit workers again.
+
+```text
+hive-runners local-resume [--state DIRECTORY]
+```
+
+## local-stop
+
+Request a graceful drain followed by controller shutdown.
+
+```text
+hive-runners local-stop [--state DIRECTORY]
+```
+
 ## migrate-state
 
 Import a stopped installation’s SQLite ledger into a new Links store.

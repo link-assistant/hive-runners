@@ -24,6 +24,8 @@ node bin/hive-runners.js deploy --inventory ./inventory.lino
 
 ## Configuration
 
+For existing workstations, see the [local private-worker guide](docs/hive-runners-local.md) for live admission, Docker, Swarm and Kubernetes.
+
 The operator guide covers SSH and platform credentials, mixed hosts, GPU profiles, deployment, monitoring, billing, and federation. [Operator guide](docs/hive-runners.md) · [CLI reference](docs/generated-cli.md) · [Issue case study](docs/case-studies/issue-1/README.md)
 
 ## Development

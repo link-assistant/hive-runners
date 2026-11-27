@@ -105,7 +105,9 @@ export function githubClient(token, fetcher) {
   async function list(path, field) {
     const records = [];
     for (let page = 1; page <= 100; page++) {
-      const response = await api(`${path}?per_page=100&page=${page}`);
+      const response = await api(
+        `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`
+      );
       requireValue(
         Array.isArray(response[field]),
         `Unexpected GitHub ${field} response`
@@ -174,6 +176,33 @@ export function githubClient(token, fetcher) {
   return {
     requirePrivateRepo,
     ensureGroup,
+    listWorkflowRuns(scope, status) {
+      return list(
+        `${pathFor(scope)}/actions/runs?status=${match(status, /^(queued|in_progress)$/, 'workflow run status')}`,
+        'workflow_runs'
+      );
+    },
+    listWorkflowJobs: (scope, runId) =>
+      list(
+        `${pathFor(scope)}/actions/runs/${integer(runId, 1, Number.MAX_SAFE_INTEGER, 'run ID')}/jobs`,
+        'jobs'
+      ),
+    generateJitConfig(scope, name, label) {
+      return api(`${pathFor(scope)}/actions/runners/generate-jitconfig`, {
+        method: 'POST',
+        body: {
+          name,
+          runner_group_id: 1,
+          labels: [label],
+          work_folder: '_work',
+        },
+      });
+    },
+    deleteRunner: (scope, runnerId) =>
+      api(
+        `${pathFor(scope)}/actions/runners/${integer(runnerId, 1, Number.MAX_SAFE_INTEGER, 'runner ID')}`,
+        { method: 'DELETE' }
+      ),
     listRunners: (scope) =>
       list(`${pathFor(scope)}/actions/runners`, 'runners'),
     listGroups: (org) =>

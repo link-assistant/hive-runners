@@ -1,0 +1,40 @@
+name: Local worker containment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/local-workers.yml'
+      - 'src/local/**'
+      - 'src/process.js'
+      - 'experiments/local-workers/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/local-workers.yml'
+      - 'src/local/**'
+      - 'src/process.js'
+      - 'experiments/local-workers/**'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-docker:
+    name: Linux Docker limits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    concurrency:
+      group: check-${{ github.workflow }}-${{ github.ref }}-linux-docker-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - name: Verify live Docker CPU, memory and filesystem limits
+        shell: bash
+        run: bash scripts/run-with-budget-warning.sh 150 "Bounded Linux Docker worker probes" node experiments/local-workers/linux-docker.mjs

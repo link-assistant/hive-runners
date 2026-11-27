@@ -84,6 +84,30 @@ const commands = {
     '[--config FILE]',
     'Start the fleet reconciler, landing page, and optional customer portal.',
   ],
+  'local-probe': [
+    '(--storage DIR | --docker-context NAME --monitor-image IMAGE)',
+    'Read physical host or Docker VM measurements and filesystem identities.',
+  ],
+  'local-start': [
+    '[--config FILE] [--state DIRECTORY] [--once]',
+    'Run one local private-worker controller in the foreground.',
+  ],
+  'local-status': [
+    '[--state DIRECTORY]',
+    'Show desired mode, active leases and the latest admission errors.',
+  ],
+  'local-drain': [
+    '[--state DIRECTORY]',
+    'Pause new admissions and let admitted workers finish.',
+  ],
+  'local-resume': [
+    '[--state DIRECTORY]',
+    'Allow the local controller to admit workers again.',
+  ],
+  'local-stop': [
+    '[--state DIRECTORY]',
+    'Request a graceful drain followed by controller shutdown.',
+  ],
   'migrate-state': [
     '--from SQLITE_FILE --state DIRECTORY',
     'Import a stopped installation’s SQLite ledger into a new Links store.',
@@ -100,7 +124,9 @@ const optionsByCommand = Object.fromEntries(
     Object.fromEntries(
       [...usage.matchAll(/--([a-z-]+)/g)].map(([, option]) => [
         option,
-        { type: option === 'apply-infra' ? 'boolean' : 'string' },
+        {
+          type: ['apply-infra', 'once'].includes(option) ? 'boolean' : 'string',
+        },
       ])
     ),
   ])
@@ -254,7 +280,70 @@ async function runConfigured(command, options, input, { env, fetcher, run }) {
   return providerClient(input.providers[name], { env, fetcher }).list();
 }
 
+async function localCommand(command, options, dependencies) {
+  if (command === 'local-probe') {
+    const { hostSample, probeDockerContext } =
+      await import('./local/telemetry.js');
+    if (options['docker-context'] && !options.storage) {
+      const { runProcess } = await import('./process.js');
+      return probeDockerContext(
+        options['docker-context'],
+        options['monitor-image'],
+        dependencies.run ?? runProcess,
+        dependencies
+      );
+    }
+    requireValue(
+      options.storage &&
+        !options['monitor-image'] &&
+        !options['docker-context'],
+      'Pass --storage DIR or --docker-context NAME --monitor-image IMAGE'
+    );
+    return hostSample({ 'fs-build': options.storage });
+  }
+  const { localStatus, startLocal } = await import('./local/controller.js');
+  const path = options.state ?? 'hive-local-state';
+  if (command !== 'local-start') {
+    const mode = {
+      'local-drain': 'draining',
+      'local-resume': 'running',
+      'local-stop': 'stopped',
+    }[command];
+    return localStatus(path, mode);
+  }
+  const input = await readData(options.config ?? 'hive-local.json');
+  const signal = new AbortController();
+  const stop = () => signal.abort();
+  const signals =
+    process.platform === 'win32'
+      ? ['SIGINT', 'SIGBREAK']
+      : ['SIGINT', 'SIGTERM'];
+  for (const name of signals) {
+    process.on(name, stop);
+  }
+  try {
+    const result = await startLocal(input, path, {
+      ...dependencies,
+      once: options.once,
+      report: options.once ? undefined : dependencies.report,
+      signal: signal.signal,
+    });
+    requireValue(
+      !options.once || Object.keys(result.errors).length === 0,
+      JSON.stringify(result)
+    );
+    return result;
+  } finally {
+    for (const name of signals) {
+      process.off(name, stop);
+    }
+  }
+}
+
 async function dispatch(command, options, dependencies) {
+  if (command.startsWith('local-')) {
+    return localCommand(command, options, dependencies);
+  }
   if (command === 'docs') {
     if (!options.output) {
       return cliReference();
@@ -330,7 +419,12 @@ export async function runHiveCli(
       args,
       options: { ...optionsByCommand[command], json: { type: 'boolean' } },
     });
-    const result = await dispatch(command, options, { env, fetcher, run });
+    const result = await dispatch(command, options, {
+      env,
+      fetcher,
+      run,
+      report: (value) => stderr(JSON.stringify(value)),
+    });
     if (result === undefined) {
       return 0;
     }

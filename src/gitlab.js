@@ -58,6 +58,10 @@ export function gitlabClient(origin, token, fetcher, signal) {
     privateScope,
     listRunners: (scope, type = 'project') =>
       list(`${scopePath(scope, type)}/runners`),
+    pendingJobs: (scope) =>
+      list(`${scopePath(scope, 'project')}/jobs`, '&scope%5B%5D=pending'),
+    deleteRunner: (runnerId) =>
+      api(`/runners/${id(runnerId)}`, { method: 'DELETE' }),
     runner: (runnerId) => api(`/runners/${id(runnerId)}`),
     job: (scope, jobId) => api(`/projects/${path(scope)}/jobs/${id(jobId)}`),
     listProjects: (scope) =>
@@ -84,14 +88,14 @@ export function gitlabClient(origin, token, fetcher, signal) {
       }
       return runner;
     },
-    async createRunner(scope, type, label) {
+    async createRunner(scope, type, label, name = `Hive Runners ${label}`) {
       const target = await privateScope(scope, type);
       return api('/user/runners', {
         method: 'POST',
         body: {
           runner_type: `${type}_type`,
           [`${type}_id`]: id(target.id),
-          description: `Hive Runners ${label}`,
+          description: name,
           ...(type === 'project' ? { locked: true } : {}),
           ...runnerPolicy(label),
         },

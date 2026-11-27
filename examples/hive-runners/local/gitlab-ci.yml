@@ -1,0 +1,14 @@
+verify-local-private-worker:
+  tags: [hive-local-amd64]
+  parallel: 2
+  timeout: 5 minutes
+  script:
+    - test "$(uname -s)" = Linux
+    - test "$(uname -m)" = x86_64
+    - test "$(id -u)" = 1000
+    - test -w "$CI_PROJECT_DIR"
+    - test ! -S /var/run/docker.sock
+    - test "$(cat /sys/fs/cgroup/memory.max)" != max
+    - dd if=/dev/zero of="$CI_PROJECT_DIR/hive-probe" bs=1M count=8 status=none
+    - rm "$CI_PROJECT_DIR/hive-probe"
+    - sleep 15
