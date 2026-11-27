@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { stat, statfs, readFile, realpath } from 'node:fs/promises';
 import { cpus, freemem, hostname, totalmem } from 'node:os';
 import { setTimeout as wait } from 'node:timers/promises';
-import { integer, requireValue } from '../config.js';
+import { integer, requireValue } from '../validation.js';
 
 const mib = 1024 ** 2;
 const cpuWindowMs = 500;

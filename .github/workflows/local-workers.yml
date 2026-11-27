@@ -7,6 +7,7 @@ on:
       - '.github/workflows/local-workers.yml'
       - 'src/local/**'
       - 'src/process.js'
+      - 'src/validation.js'
       - 'experiments/local-workers/**'
   push:
     branches: [main]
@@ -14,18 +15,28 @@ on:
       - '.github/workflows/local-workers.yml'
       - 'src/local/**'
       - 'src/process.js'
+      - 'src/validation.js'
       - 'experiments/local-workers/**'
 
 permissions:
   contents: read
 
+env:
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
 jobs:
   linux-docker:
-    name: Linux Docker limits
-    runs-on: ubuntu-24.04
+    name: Linux Docker limits (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
     timeout-minutes: 6
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-linux-docker-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      group: check-${{ github.workflow }}-${{ github.ref }}-linux-docker-${{ matrix.os }}-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     steps:
       - uses: actions/checkout@v7
