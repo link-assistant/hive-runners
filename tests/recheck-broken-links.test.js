@@ -378,9 +378,11 @@ describe('re-check step end to end', () => {
   );
 
   itUnless(sandboxed)(
-    'releases the gate when a cached 503 recovers with a fresh success',
+    'releases the gate when duplicate cached 503 entries recover in one request',
     async () => {
+      let requests = 0;
       const server = createServer((request, response) => {
+        requests++;
         response.writeHead(200);
         response.end();
       });
@@ -390,6 +392,7 @@ describe('re-check step end to end', () => {
       const dir = mkdtempSync(path.join(tmpdir(), 'recheck-'));
       try {
         const reportPath = writeReport(dir, [
+          `- [503] <http://127.0.0.1:${port}/slow> | Error (cached)`,
           `- [503] <http://127.0.0.1:${port}/slow> | Error (cached)`,
         ]);
         const recoveredPath = path.join(dir, 'recovered.txt');
@@ -404,6 +407,7 @@ describe('re-check step end to end', () => {
         });
 
         expect(code).toBe(0);
+        expect(requests).toBe(1);
         expect(readFileSync(outputPath, 'utf8')).toContain(
           'all_recovered=true'
         );
