@@ -420,6 +420,10 @@ describe('local runtime specifications', () => {
     assert.equal(spec.automountServiceAccountToken, false);
     assert.equal(spec.restartPolicy, 'Never');
     assert.equal(spec.containers[0].resources.limits.memory, '1552Mi');
+    assert.equal(
+      spec.containers[0].terminationMessagePath,
+      '/root/hive-termination-log'
+    );
     assert.equal(spec.volumes[0].emptyDir.sizeLimit, '1024Mi');
     assert.equal(spec.nodeSelector['kubernetes.io/arch'], 'arm64');
     assert.deepEqual(

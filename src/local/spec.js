@@ -177,6 +177,8 @@ export function kubeWorker(node, pool, lease, owner) {
           imagePullPolicy: 'Never',
           command: ['/opt/hive-worker'],
           workingDir: '/hive',
+          // Kubelet mounts a writable host file here. The worker cannot traverse /root.
+          terminationMessagePath: '/root/hive-termination-log',
           env: Object.entries(workerEnv(pool)).map(([name, value]) => ({
             name,
             value,

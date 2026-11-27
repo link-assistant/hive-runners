@@ -15,6 +15,7 @@ else
 fi
 test ! -S /var/run/docker.sock || exit 16
 awk '$2 == "/" && $4 ~ /(^|,)ro(,|$)/ { locked = 1 } END { exit !locked }' /proc/mounts || exit 17
+test ! -w /dev/termination-log && test ! -w /root/hive-termination-log || exit 24
 
 cpu_before=$(awk '$1 == "usage_usec" { print $2 }' /sys/fs/cgroup/cpu.stat)
 yes >/dev/null &

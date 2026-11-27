@@ -13,7 +13,7 @@ hive-runners local-probe --storage /path/on/physical/build/filesystem --json
 hive-runners local-probe --docker-context default --monitor-image alpine@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2 --json
 ```
 
-Build the supplied [worker image](../examples/hive-runners/local/Dockerfile) from the repository root. Use a supported, current runner base pinned to a digest. The GitHub build expects the upstream runner under `/home/runner`. For GitLab use a GitLab Runner base with the shell executor and the tools your jobs require. The image must contain `/opt/hive-worker`, use UID/GID 1000, and declare zero Dockerfile volumes. Push the result to a registry you control, then pull its exact digest onto each selected node. For a multi-architecture repository, verify the pinned manifest resolves to the native architecture on every selected node.
+Build the supplied [worker image](../examples/hive-runners/local/Dockerfile) from the repository root. Use a supported, current runner base pinned to a digest. The GitHub build expects the upstream runner under `/home/runner`. For GitLab use a GitLab Runner base with the shell executor and the tools your jobs require. The image must contain `/opt/hive-worker`, use UID/GID 1000, keep `/root` accessible only to the root user, and declare zero Dockerfile volumes. Kubernetes mounts its writable termination log under `/root` so jobs cannot write to that host file. Push the result to a registry you control, then pull its exact digest onto each selected node. For a multi-architecture repository, verify the pinned manifest resolves to the native architecture on every selected node.
 
 ```sh
 docker build --build-arg RUNNER_IMAGE="$PINNED_RUNNER_BASE" \

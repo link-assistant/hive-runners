@@ -2,6 +2,9 @@
 set -eu
 umask 077
 cd /hive
+if [ -w /dev/termination-log ] || [ -w /root/hive-termination-log ]; then
+  exit 65
+fi
 ticket=${HIVE_WORKER_TICKET-}
 unset HIVE_WORKER_TICKET
 if [ -z "$ticket" ]; then
