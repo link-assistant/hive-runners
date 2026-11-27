@@ -181,13 +181,17 @@ describe('artifact evidence and downloads', () => {
   });
   it('retries downloads by immutable ID and refuses missing required artifacts', async () => {
     let calls = 0;
+    let listings = 0;
     const client = {
-      listArtifacts: async () => ({
-        artifacts: [
-          { id: 1, name: 'digest-a' },
-          { id: 2, name: 'unrelated' },
-        ],
-      }),
+      listArtifacts: async () => {
+        listings++;
+        return {
+          artifacts: [
+            { id: 1, name: 'digest-a' },
+            { id: 2, name: 'unrelated' },
+          ],
+        };
+      },
       downloadArtifact: async (id) => {
         assert.equal(id, 1);
         if (++calls === 1) {
@@ -197,10 +201,42 @@ describe('artifact evidence and downloads', () => {
     };
     await downloadArtifactsWithRetry(client, 'digest-*', '.', fast);
     assert.equal(calls, 2);
+    assert.equal(listings, 1);
     await assert.rejects(
       () => downloadArtifactsWithRetry(client, 'missing-*', '.', fast),
       /not found/
     );
+    assert.equal(listings, 4);
+  });
+  it('waits for a finalized artifact to appear in the run listing', async () => {
+    let listings = 0;
+    const waits = [];
+    const downloaded = [];
+    await downloadArtifactsWithRetry(
+      {
+        async listArtifacts(options) {
+          assert.deepEqual(options, { latest: true });
+          return {
+            artifacts: [
+              { id: 1, name: 'transport-roundtrip' },
+              ...(++listings === 3
+                ? [{ id: 2, name: 'pages-roundtrip', digest: 'sha256:abc' }]
+                : []),
+            ],
+          };
+        },
+        async downloadArtifact(id, options) {
+          downloaded.push([id, options]);
+        },
+      },
+      'pages-round*',
+      'out',
+      { ...fast, sleep: async (ms) => waits.push(ms) }
+    );
+    assert.deepEqual(waits, [5000, 10000]);
+    assert.deepEqual(downloaded, [
+      [2, { path: 'out', expectedHash: 'sha256:abc' }],
+    ]);
   });
   it('passes the recorded upload digest so the SDK verifies downloads', async () => {
     const seen = [];

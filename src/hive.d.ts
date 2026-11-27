@@ -161,6 +161,20 @@ export declare function githubClient(
     name: string,
     repositories: string[]
   ): Promise<Record<string, unknown>>;
+  listWorkflowRuns(
+    scope: string,
+    status: 'queued' | 'in_progress'
+  ): Promise<Record<string, unknown>[]>;
+  listWorkflowJobs(
+    scope: string,
+    runId: number
+  ): Promise<Record<string, unknown>[]>;
+  generateJitConfig(
+    scope: string,
+    name: string,
+    label: string
+  ): Promise<{ encoded_jit_config: string }>;
+  deleteRunner(scope: string, runnerId: number): Promise<null>;
   listRunners(scope: string): Promise<Record<string, unknown>[]>;
   listGroups(org: string): Promise<Record<string, unknown>[]>;
   setLabels(
@@ -188,6 +202,8 @@ export declare function gitlabClient(
     scope: string,
     type?: GitLabScope
   ): Promise<Record<string, unknown>[]>;
+  pendingJobs(scope: string): Promise<Record<string, unknown>[]>;
+  deleteRunner(id: number): Promise<null>;
   runner(id: number): Promise<Record<string, unknown>>;
   job(scope: string, id: number): Promise<Record<string, unknown>>;
   listProjects(scope: string): Promise<Record<string, unknown>[]>;
@@ -195,7 +211,8 @@ export declare function gitlabClient(
   createRunner(
     scope: string,
     type: GitLabScope,
-    label: string
+    label: string,
+    name?: string
   ): Promise<{ id: number; token: string }>;
   configureRunner(id: number, label: string): Promise<Record<string, unknown>>;
 };

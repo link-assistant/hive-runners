@@ -2,6 +2,9 @@ import { isIP } from 'node:net';
 import { URL } from 'node:url';
 import { readData, parseNotation } from './notation.js';
 import { fits, jobOverhead, sizing } from './resources.js';
+import { integer, requireValue } from './validation.js';
+
+export { integer, requireValue } from './validation.js';
 
 export const slug = /^[a-z][a-z0-9-]{0,30}$/;
 export const environmentName = /^[A-Z_][A-Z0-9_]*$/;
@@ -13,12 +16,6 @@ export const githubScope =
   /^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\/[A-Za-z0-9][A-Za-z0-9_.-]{0,99})?$/;
 export const gitlabScope =
   /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}(\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}){0,9}$/;
-
-export function requireValue(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
 
 export function object(value, label) {
   requireValue(
@@ -32,14 +29,6 @@ export function match(value, pattern, label) {
   requireValue(
     typeof value === 'string' && pattern.test(value),
     `Invalid ${label}`
-  );
-  return value;
-}
-
-export function integer(value, min, max, label) {
-  requireValue(
-    Number.isSafeInteger(value) && value >= min && value <= max,
-    `${label} must be between ${min} and ${max}`
   );
   return value;
 }

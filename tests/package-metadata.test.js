@@ -105,6 +105,7 @@ describe('publishable package metadata', () => {
       'charts/hive-runners',
       'docs/generated-cli.md',
       'docs/hive-runners.md',
+      'docs/hive-runners-local.md',
       'examples/hive-runners',
       'CHANGELOG.md',
       'LICENSE',

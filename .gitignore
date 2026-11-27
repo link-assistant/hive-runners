@@ -147,3 +147,6 @@ reports/
 hive-runners.json
 hive-runners.lino
 hive-state/
+hive-local.json
+hive-local.lino
+hive-local-state/

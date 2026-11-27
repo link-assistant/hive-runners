@@ -1,0 +1,24 @@
+name: Verify local private worker
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  worker:
+    runs-on: hive-local-amd64
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        slot: [1, 2]
+    steps:
+      - name: Check native Linux executable and workspace
+        shell: bash
+        run: |
+          [[ "$(uname -s)" == Linux ]]
+          [[ "$(uname -m)" == x86_64 ]]
+          [[ "$(id -u)" == 1000 ]]
+          test -w "$GITHUB_WORKSPACE"
+          test ! -S /var/run/docker.sock
+          test "$(cat /sys/fs/cgroup/memory.max)" != max
+          dd if=/dev/zero of="$GITHUB_WORKSPACE/hive-probe" bs=1M count=8 status=none
+          rm "$GITHUB_WORKSPACE/hive-probe"
+          sleep 15

@@ -1,5 +1,7 @@
 # Hive Runners operator guide
 
+For workstation jobs, see [local private workers and live resource admission](hive-runners-local.md).
+
 ## Choose what to deploy
 
 | Mode                    | Configure                                                                  | Where jobs run                                     |

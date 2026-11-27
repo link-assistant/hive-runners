@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "controllerScope": "workstation",
+  "controllerStorage": "/private/path/to/docker-storage",
+  "scopes": {
+    "workstation": {
+      "identity": "host:workstation",
+      "resources": {
+        "cpu": "host:workstation",
+        "memory": "host:workstation",
+        "fs-build": "fs:1:1"
+      },
+      "overhead": { "cpu": 150, "memory": 128, "fs-build": 32 }
+    },
+    "engine": {
+      "identity": "docker:ENGINE_ID",
+      "resources": {
+        "cpu": "docker:ENGINE_ID",
+        "memory": "docker:ENGINE_ID",
+        "fs-build": "fs:2"
+      }
+    }
+  },
+  "nodes": {
+    "local-engine": {
+      "backend": "docker",
+      "os": "linux",
+      "arch": "amd64",
+      "context": "default",
+      "identity": "ENGINE_ID",
+      "runtimeScope": "engine",
+      "scopes": ["workstation", "engine"],
+      "monitorImage": "alpine@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2"
+    }
+  },
+  "pools": {
+    "local-builds": {
+      "platform": "github",
+      "scope": "organization/private-repository",
+      "label": "hive-local-amd64",
+      "tokenFile": "/private/path/to/github-token",
+      "nodes": ["local-engine"],
+      "image": "registry.example.com/hive/github-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "slots": 2,
+      "limits": { "cpuMillis": 500, "memoryMiB": 512, "diskMiB": 1024 }
+    }
+  }
+}
