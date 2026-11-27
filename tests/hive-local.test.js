@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { URL } from 'node:url';
 import { describe, it } from 'test-anywhere';
+import { kubeWorkers } from '../experiments/local-workers/linux-orchestrators.mjs';
 import { admissionPolicy, selectWorkers } from '../src/local/admission.js';
 import { startLocal, localStatus } from '../src/local/controller.js';
 import { localConfig } from '../src/local/config.js';
@@ -432,6 +433,53 @@ describe('local runtime specifications', () => {
       ['physical-node']
     );
   });
+});
+
+describe('Kubernetes containment smoke setup', () => {
+  it('waits for the namespace service account before creating a tokenless worker', () =>
+    temporary(async (directory) => {
+      let serviceAccountReady = false;
+      let workerCreated = false;
+      const kubectl = async (args) => {
+        const command = args.join(' ');
+        switch (command) {
+          case 'get nodes -o json':
+            return JSON.stringify({
+              items: [{ metadata: { name: 'node', uid: 'node-id' } }],
+            });
+          case 'create namespace hive-smoke':
+          case 'label namespace hive-smoke pod-security.kubernetes.io/enforce=restricted':
+          case 'label node node hive-runners.node-restriction.kubernetes.io/node-uid=node-id':
+            return '';
+          case '--namespace hive-smoke wait --for=create serviceaccount/default --timeout=30s':
+            serviceAccountReady = true;
+            return '';
+          case `--namespace hive-smoke create -f ${join(directory, 'object.json')}`: {
+            const object = JSON.parse(await readFile(args.at(-1), 'utf8'));
+            if (object.kind === 'Pod') {
+              assert.ok(
+                serviceAccountReady,
+                'serviceaccount "default" not found'
+              );
+              assert.equal(object.spec.automountServiceAccountToken, false);
+              workerCreated = true;
+            }
+            return '';
+          }
+          default:
+            assert.match(
+              command,
+              /^--namespace hive-smoke get pod hive-.* -o json$/
+            );
+            return JSON.stringify({
+              spec: { nodeName: 'node' },
+              status: { phase: 'Succeeded' },
+            });
+        }
+      };
+      await kubeWorkers(directory, kubectl, 1, 'mock cluster');
+      assert.ok(workerCreated);
+    }));
 });
 
 describe('native worker guest launcher', () => {

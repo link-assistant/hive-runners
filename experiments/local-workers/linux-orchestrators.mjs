@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { URL, fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -290,7 +290,12 @@ async function k3s(directory) {
   }
 }
 
-async function kubeWorkers(directory, kubectl, expectedNodes, distribution) {
+export async function kubeWorkers(
+  directory,
+  kubectl,
+  expectedNodes,
+  distribution
+) {
   const { items } = JSON.parse(await kubectl(['get', 'nodes', '-o', 'json']));
   assert.equal(items.length, expectedNodes);
   const namespace = 'hive-smoke';
@@ -300,6 +305,15 @@ async function kubeWorkers(directory, kubectl, expectedNodes, distribution) {
     'namespace',
     namespace,
     'pod-security.kubernetes.io/enforce=restricted',
+  ]);
+  // Namespace creation returns before the service-account controller runs.
+  await kubectl([
+    '--namespace',
+    namespace,
+    'wait',
+    '--for=create',
+    'serviceaccount/default',
+    '--timeout=30s',
   ]);
   const placements = [];
   for (const [
@@ -353,26 +367,34 @@ async function kubeWorkers(directory, kubectl, expectedNodes, distribution) {
   );
 }
 
-const exercise = {
-  swarm,
-  'swarm-distributed': distributedSwarm,
-  kind,
-  minikube,
-  k3s,
-}[process.argv[2]];
-assert.ok(exercise, 'Expected swarm, swarm-distributed, kind, minikube or k3s');
-const directory = await mkdtemp(join(tmpdir(), 'hive-orchestrator-smoke-'));
-try {
-  await docker([
-    'build',
-    '-t',
-    image,
-    fileURLToPath(new URL('.', import.meta.url)),
-  ]);
-  await exercise(directory);
-} finally {
-  await Promise.allSettled([
-    docker(['image', 'rm', image]),
-    rm(directory, { recursive: true, force: true }),
-  ]);
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1])
+) {
+  const exercise = {
+    swarm,
+    'swarm-distributed': distributedSwarm,
+    kind,
+    minikube,
+    k3s,
+  }[process.argv[2]];
+  assert.ok(
+    exercise,
+    'Expected swarm, swarm-distributed, kind, minikube or k3s'
+  );
+  const directory = await mkdtemp(join(tmpdir(), 'hive-orchestrator-smoke-'));
+  try {
+    await docker([
+      'build',
+      '-t',
+      image,
+      fileURLToPath(new URL('.', import.meta.url)),
+    ]);
+    await exercise(directory);
+  } finally {
+    await Promise.allSettled([
+      docker(['image', 'rm', image]),
+      rm(directory, { recursive: true, force: true }),
+    ]);
+  }
 }
