@@ -51,15 +51,16 @@ jobs:
         run: bash scripts/run-with-budget-warning.sh 150 "Bounded Linux Docker worker probes" node experiments/local-workers/linux-docker.mjs
 
   linux-orchestrators:
-    name: Linux worker placement (${{ matrix.backend }})
-    runs-on: ubuntu-24.04
+    name: Linux worker placement (${{ matrix.backend }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        backend: [swarm, kind]
+        backend: [swarm, swarm-distributed, kind, minikube, k3s]
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
     timeout-minutes: 8
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}-linux-${{ matrix.backend }}-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
+      group: check-${{ github.workflow }}-${{ github.ref }}-linux-${{ matrix.backend }}-${{ matrix.os }}-${{ (github.event_name == 'pull_request' && github.event.action == 'synchronize' && 'sync') || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
     steps:
       - uses: actions/checkout@v7
@@ -69,15 +70,41 @@ jobs:
         with:
           node-version: '24.x'
           package-manager-cache: false
-      - name: Fetch the pinned kind binary
-        if: matrix.backend == 'kind'
+      - name: Fetch the pinned cluster binary
+        if: contains(fromJSON('["kind", "minikube", "k3s"]'), matrix.backend)
         shell: bash
+        env:
+          SMOKE_BACKEND: ${{ matrix.backend }}
         run: |
-          binary_dir="$RUNNER_TEMP/hive-kind"
+          case "$RUNNER_ARCH" in
+            X64) arch=amd64 ;;
+            ARM64) arch=arm64 ;;
+            *) exit 1 ;;
+          esac
+          case "$SMOKE_BACKEND" in
+            kind)
+              executable=kind repo=kubernetes-sigs/kind version=v0.31.0
+              amd64_sha=eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
+              arm64_sha=8e1014e87c34901cc422a1445866835d1e666f2a61301c27e722bdeab5a1f7e4
+              ;;
+            minikube)
+              executable=minikube repo=kubernetes/minikube version=v1.39.0
+              amd64_sha=b738496da01be06bbaf80c688f57ce25acd3849fbb518155f3a88e03ef555aa4
+              arm64_sha=202f331cb677761c5aec81c58472d16d65707358b9f66226210be3fe3275b1c3
+              ;;
+            k3s)
+              executable=k3d repo=k3d-io/k3d version=v5.9.0
+              amd64_sha=06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0
+              arm64_sha=03cde5cf23e6e8e67de5a039ecf26e5b85aca82fba3e5d13dadf904cd218a250
+              ;;
+            *) exit 1 ;;
+          esac
+          if [[ "$arch" == amd64 ]]; then checksum="$amd64_sha"; else checksum="$arm64_sha"; fi
+          binary_dir="$RUNNER_TEMP/hive-cluster"
           mkdir -p "$binary_dir"
-          bash scripts/run-with-budget-warning.sh 35 "Download pinned kind binary" curl --fail --silent --show-error --location https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64 --output "$binary_dir/kind"
-          printf '%s  %s\n' eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa "$binary_dir/kind" | sha256sum --check --strict
-          chmod 0755 "$binary_dir/kind"
+          bash scripts/run-with-budget-warning.sh 60 "Download pinned $executable binary" curl --fail --silent --show-error --location "https://github.com/$repo/releases/download/$version/$executable-linux-$arch" --output "$binary_dir/$executable"
+          printf '%s  %s\n' "$checksum" "$binary_dir/$executable" | sha256sum --check --strict
+          chmod 0755 "$binary_dir/$executable"
           printf '%s\n' "$binary_dir" >> "$GITHUB_PATH"
       - name: Disable swap on the disposable runner
         shell: bash
@@ -88,4 +115,4 @@ jobs:
         shell: bash
         env:
           SMOKE_BACKEND: ${{ matrix.backend }}
-        run: bash scripts/run-with-budget-warning.sh 210 "Bounded Linux orchestrator probes" node experiments/local-workers/linux-orchestrators.mjs "$SMOKE_BACKEND"
+        run: bash scripts/run-with-budget-warning.sh 270 "Bounded Linux orchestrator probes" node experiments/local-workers/linux-orchestrators.mjs "$SMOKE_BACKEND"
