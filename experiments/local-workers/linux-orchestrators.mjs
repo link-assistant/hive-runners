@@ -133,6 +133,8 @@ async function distributedSwarm(directory) {
         node,
         '--network',
         network,
+        '--mount',
+        `type=bind,source=${directory},target=/hive-fixture,readonly`,
         dind,
         'dockerd',
         '--host=unix:///var/run/docker.sock',
@@ -150,8 +152,7 @@ async function distributedSwarm(directory) {
         await wait(1000);
       }
       assert.ok(ready, `Fixture Docker Engine ${node} did not start`);
-      await docker(['cp', archive, `${node}:/tmp/image.tar`]);
-      await inside(node, ['load', '-i', '/tmp/image.tar']);
+      await inside(node, ['load', '-i', '/hive-fixture/image.tar']);
     }
     const ip = await docker([
       'inspect',
@@ -162,7 +163,6 @@ async function distributedSwarm(directory) {
     await manager(['swarm', 'init', '--advertise-addr', ip]);
     const token = await manager(['swarm', 'join-token', '-q', 'worker']);
     await inside(workerName, ['swarm', 'join', '--token', token, `${ip}:2377`]);
-    await docker(['cp', ticketPath, `${managerName}:/tmp/ticket`]);
     const placements = [];
     for (const target of nodes) {
       const identity = await inside(target, [
@@ -174,7 +174,7 @@ async function distributedSwarm(directory) {
       placements.push({ target, identity });
     }
     assert.notEqual(placements[0].identity, placements[1].identity);
-    await swarmWorkers(manager, placements, '/tmp/ticket');
+    await swarmWorkers(manager, placements, '/hive-fixture/ticket');
   } finally {
     await Promise.allSettled(
       nodes.map((node) => docker(['rm', '-f', '-v', node]))
