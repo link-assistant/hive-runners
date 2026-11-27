@@ -283,7 +283,9 @@ describe('local worker lifecycle', () => {
         /one worker OS and architecture/
       );
     }));
+});
 
+describe('local private provider registration', () => {
   it('refreshes credentials and requests only a repository-scoped GitHub JIT configuration', () =>
     temporary(async (directory) => {
       const config = localConfig(await fixture(directory));
@@ -325,6 +327,66 @@ describe('local worker lifecycle', () => {
         '/repos/organization/private-repository/actions/runners/generate-jitconfig',
         'Bearer rotated-shape',
       ]);
+    }));
+
+  it('locks the GitLab runner to its private project and cleans up only its own registration', () =>
+    temporary(async (directory) => {
+      const config = await fixture(directory);
+      config.pools['local-builds'].platform = 'gitlab';
+      const pool = localConfig(config).pools['local-builds'];
+      await writeFile(pool.tokenFile, 'private-token', { mode: 0o600 });
+      let visibility = 'private';
+      const deleted = [];
+      const fetcher = (url, options) => {
+        assert.equal(url.origin, 'https://gitlab.com');
+        assert.equal(options.headers['private-token'], 'private-token');
+        const path = url.pathname;
+        if (path === '/api/v4/user/runners') {
+          assert.equal(options.method, 'POST');
+          assert.deepEqual(JSON.parse(options.body), {
+            runner_type: 'project_type',
+            project_id: 42,
+            description: 'lease',
+            locked: true,
+            tag_list: [pool.label],
+            run_untagged: false,
+          });
+          return Response.json({ token: 'glrt-fixture' });
+        }
+        if (options.method === 'DELETE') {
+          deleted.push(path);
+          return new Response(null, { status: 204 });
+        }
+        if (path.endsWith('/jobs')) {
+          assert.equal(url.searchParams.get('scope[]'), 'pending');
+          return Response.json([
+            { id: 1, status: 'pending', tag_list: [pool.label] },
+            { id: 2, status: 'pending', tag_list: [pool.label, 'another'] },
+            { id: 3, status: 'pending', tag_list: [pool.label], runner: {} },
+          ]);
+        }
+        if (path.endsWith('/runners')) {
+          return Response.json([
+            { id: 4, description: 'other-worker' },
+            { id: 5, description: 'lease' },
+          ]);
+        }
+        assert.equal(
+          path,
+          `/api/v4/projects/${encodeURIComponent(pool.scope)}`
+        );
+        return Response.json({ id: 42, visibility });
+      };
+      const provider = await providerFor(pool, { fetcher });
+      assert.deepEqual(await provider.queued(), ['1']);
+      assert.equal(await provider.register({ id: 'lease' }), 'glrt-fixture');
+      await provider.cleanup({ id: 'lease' });
+      assert.deepEqual(deleted, ['/api/v4/runners/5']);
+      visibility = 'public';
+      await assert.rejects(
+        provider.register({ id: 'lease' }),
+        /must be private/
+      );
     }));
 });
 
