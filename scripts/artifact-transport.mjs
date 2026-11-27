@@ -33,13 +33,17 @@ export function isTransientArtifactError(error) {
 
 export async function retryArtifact(
   operation,
-  { sleep = delay, log = console.log } = {}
+  {
+    sleep = delay,
+    log = console.log,
+    shouldRetry = isTransientArtifactError,
+  } = {}
 ) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       return await operation(attempt);
     } catch (error) {
-      if (attempt === 3 || !isTransientArtifactError(error)) {
+      if (attempt === 3 || !shouldRetry(error)) {
         throw error;
       }
       log(
@@ -81,6 +85,8 @@ export function uploadArtifactWithRetry(
   }, retryOptions);
 }
 
+class ArtifactNotVisibleError extends Error {}
+
 export async function downloadArtifactsWithRetry(
   client,
   pattern,
@@ -90,18 +96,29 @@ export async function downloadArtifactsWithRetry(
   if (!/^[\w.-]+\*?$/.test(pattern)) {
     throw new Error('Artifact pattern must be a name or prefix followed by *');
   }
-  const { artifacts } = await retryArtifact(
-    () => client.listArtifacts({ latest: true }),
-    retryOptions
+  const selected = await retryArtifact(
+    async () => {
+      const { artifacts } = await client.listArtifacts({ latest: true });
+      const matches = artifacts.filter((artifact) =>
+        pattern.endsWith('*')
+          ? artifact.name.startsWith(pattern.slice(0, -1))
+          : artifact.name === pattern
+      );
+      // The run's listing can lag behind a successful upload finalization.
+      if (!matches.length) {
+        throw new ArtifactNotVisibleError(
+          `Required artifacts not found: ${pattern}`
+        );
+      }
+      return matches;
+    },
+    {
+      ...retryOptions,
+      shouldRetry: (error) =>
+        error instanceof ArtifactNotVisibleError ||
+        isTransientArtifactError(error),
+    }
   );
-  const selected = artifacts.filter((artifact) =>
-    pattern.endsWith('*')
-      ? artifact.name.startsWith(pattern.slice(0, -1))
-      : artifact.name === pattern
-  );
-  if (!selected.length) {
-    throw new Error(`Required artifacts not found: ${pattern}`);
-  }
   for (const artifact of selected) {
     await retryArtifact(
       () =>
